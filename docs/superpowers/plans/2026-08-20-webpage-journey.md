@@ -53,7 +53,8 @@
 ## Task 1: Project scaffold and `--osi` reference
 
 **Files:**
-- Create: `.gitignore`, `README.md`, `wj/__init__.py`, `wj/collect/__init__.py`, `wj/render.py`, `trace.py`
+- Create: `.gitignore`, `wj/__init__.py`, `wj/collect/__init__.py`, `wj/render.py`, `trace.py`
+  (`README.md` is written in Task 21, which supplies its full content — it is not a Task 1 deliverable)
 - Move: `~/Projects/webpage-journey_osi.py` content is the source for the OSI table (the original stays at `~/Projects/webpage_journey_osi.py` until Task 20)
 - Test: `tests/test_osi_reference.py`
 
