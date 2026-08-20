@@ -15,36 +15,42 @@ load a webpage — from opposite ends.
 
 ### Homebrew (macOS)
 
-The formula lives in this repo, not a tap, so it is installed from a URL rather than by
-name. Nothing to clone:
+The formula lives in this repo. Tap the repo itself — no separate tap repo, nothing to
+clone:
 
 ```bash
-HOMEBREW_DEVELOPER=1 brew install --formula \
-  https://raw.githubusercontent.com/razvanbalsan/webpage-journey/main/webpage-journey.rb
+brew tap razvanbalsan/webpage-journey https://github.com/razvanbalsan/webpage-journey.git
+brew trust --formula razvanbalsan/webpage-journey/webpage-journey
+brew install razvanbalsan/webpage-journey/webpage-journey
 
 webpage-journey example.com
 ```
 
-The `HOMEBREW_DEVELOPER=1` is not optional on Homebrew 6.x — see the caveats below.
+The `brew trust` step is required on Homebrew 6.x, which refuses formulae from untrusted
+taps. Homebrew will tell you so if you skip it.
 
-Or from a clone, if you already have one:
+To update later:
 
 ```bash
-git clone https://github.com/razvanbalsan/webpage-journey.git
-cd webpage-journey
-HOMEBREW_DEVELOPER=1 brew install --formula ./webpage-journey.rb
+brew update && brew upgrade razvanbalsan/webpage-journey/webpage-journey
 ```
+
+If a `brew install` fails with `Formula reports different checksum: 0000…`, your tap is
+older than the release. `brew update` refreshes it; `brew untap razvanbalsan/webpage-journey`
+followed by the tap command above always works.
+
+**Installing the formula file directly does not work.** Homebrew 6.x rejects
+`brew install --formula <url>` with *"Non-checksummed download of a formula file from an
+arbitrary URL is unsupported"*, and path installs need `HOMEBREW_DEVELOPER=1`. Use the tap.
 
 The formula builds the tagged release (`v0.1.0`), not your working tree — so a clone that
 is ahead of the tag still installs the tagged code.
 
 A few things worth knowing before you rely on this path:
 
-- **There is no `brew upgrade` for this.** Homebrew's upgrade tracking is per-tap; a
-  formula installed from a bare path or URL isn't in one, so `brew upgrade
-  webpage-journey` won't find a new version even after one is tagged. To update, pull the
-  repo (or re-fetch the raw URL) and re-run the install command — add `--force` if
-  Homebrew reports the formula is already installed at that version.
+- **`brew upgrade` does work**, because the repo is tapped rather than installed from a
+  loose file. `brew update && brew upgrade razvanbalsan/webpage-journey/webpage-journey`
+  picks up a newer tag once one is pushed.
 - **Recent Homebrew (6.x) requires developer mode for path/URL installs.** If the command
   above is refused with "Homebrew requires formulae to be in a tap", re-run it with
   `HOMEBREW_DEVELOPER=1 brew install --formula ./webpage-journey.rb`.
