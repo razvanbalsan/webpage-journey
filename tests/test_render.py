@@ -101,6 +101,69 @@ def test_render_dns_shows_records_failed_as_query_failures():
     assert "failed" in out.lower()
 
 
+def test_render_dns_distinguishes_present_absent_and_failed_record_types():
+    # Task 24's central subtlety: a record type sits in one of three states
+    # that must never collapse into each other -- has records, confirmed
+    # absent (the query succeeded and the zone publishes none), or unknown
+    # (the query itself failed). Collapsing "confirmed absent" into "skip
+    # entirely" (the old behaviour) made it visually identical to a type
+    # that was never queried; collapsing "failed" into "confirmed absent"
+    # would misreport an unknown as a real measurement.
+    trace = full_trace()
+    trace["dns"]["records"]["CNAME"] = []   # confirmed absent
+    trace["dns"]["records"]["MX"] = []      # query failed
+    trace["dns"]["records_failed"] = ["MX"]
+    out = capture(render.render_dns, trace)
+    lines = [l.strip(" │├└─") for l in out.splitlines()]
+
+    def line_for(rtype):
+        return next(l for l in lines if l.startswith(rtype + "  "))
+
+    has_line = line_for("A")
+    absent_line = line_for("CNAME")
+    failed_line = line_for("MX")
+
+    assert "none published" not in has_line
+    assert "none published" in absent_line
+    assert "none published" not in failed_line
+    assert "unknown" in failed_line.lower() and "failed" in failed_line.lower()
+    assert absent_line != failed_line
+
+
+def test_render_dns_https_extensions_follow_the_https_records_own_state():
+    # alpn_advertised/ech come off the HTTPS record and must follow the same
+    # three-state rule the HTTPS record itself is in -- not invent "no
+    # ALPN"/"no ECH" when the record's own state is absent or unknown.
+    trace = full_trace()
+
+    # 1) HTTPS record present -> show what it actually advertises.
+    trace["dns"]["records"]["HTTPS"] = [{"data": '1 . alpn="h2,h3" ech="AEX"', "ttl": 300}]
+    trace["dns"]["alpn_advertised"] = ["h2", "h3"]
+    trace["dns"]["ech"] = True
+    out = capture(render.render_dns, trace)
+    assert "h2, h3" in out
+    assert "ECH" in out and "yes" in out
+    assert "no HTTPS record" not in out
+
+    # 2) HTTPS confirmed absent (query succeeded, zone publishes none) --
+    # must say so plainly, not invent "no ALPN"/"ECH: no".
+    trace["dns"]["records"]["HTTPS"] = []
+    trace["dns"]["records_failed"] = []
+    trace["dns"]["alpn_advertised"] = []
+    trace["dns"]["ech"] = False
+    out = capture(render.render_dns, trace)
+    assert "no HTTPS record published" in out
+    assert "None" not in out
+
+    # 3) HTTPS query failed -> unknown; must not claim absence, and must
+    # read differently from state 2.
+    trace["dns"]["records_failed"] = ["HTTPS"]
+    out = capture(render.render_dns, trace)
+    assert "no HTTPS record published" not in out
+    assert "ALPN advertised" not in out
+    assert "unknown" in out.lower() and "failed" in out.lower()
+
+
 def test_render_http_says_truncated_when_redirect_limit_reached():
     trace = full_trace()
     trace["http"]["hops"] = [

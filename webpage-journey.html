@@ -1111,11 +1111,26 @@
         var s = traceSection("dns");
         if (!s) return [];
         var rows = [];
+        var recordsMap = s.records || {};
         var failed = s.records_failed || [];
-        Object.keys(s.records || {}).forEach(function (rtype) {
-          var list = s.records[rtype];
+        // A record type sits in one of three distinct states, and collapsing
+        // any two together reintroduces the bug this project keeps fixing:
+        // (1) records present — list them; (2) the query succeeded and came
+        // back empty — the zone publishes none of this type, a real,
+        // confirmed measurement; (3) the type is in records_failed — the
+        // query itself did not complete, so an empty list here means
+        // "unknown", not "none published". Skipping empty-but-succeeded
+        // types made a confirmed absence look identical to a type that was
+        // never queried at all.
+        Object.keys(recordsMap).forEach(function (rtype) {
+          var list = recordsMap[rtype];
           if (list && list.length) {
-            rows.push([rtype, fact(list.map(function (r) { return r.data; }).join(", "), "measured")]);
+            rows.push([rtype + " (" + list.length + ")", fact(
+              list.map(function (r) { return r.data; }).join(", "), "measured")]);
+          } else if (failed.indexOf(rtype) !== -1) {
+            rows.push([rtype, fact("unknown — query failed", "measured")]);
+          } else {
+            rows.push([rtype, fact("none published", "measured")]);
           }
         });
         if (failed.length) {
@@ -1124,13 +1139,26 @@
           rows.push(["Query failed", fact("no answer for: " + failed.join(", ") +
             " — unknown, not confirmed absent", "measured")]);
         }
-        var aRec = ((s.records || {}).A || [])[0];
+        var aRec = (recordsMap.A || [])[0];
         rows.push(["TTL", fact(aRec ? aRec.ttl + "s" : null, "measured")]);
         rows.push(["Resolver", fact(((s.resolver || {}).servers || []).join(", "), "measured")]);
         rows.push(["DNSSEC", fact(s.dnssec, "measured")]);
-        rows.push(["Advertised ALPN", fact(
-          failed.indexOf("HTTPS") !== -1 ? null : ((s.alpn_advertised || []).join(", ") || "none published"),
-          "measured")]);
+        // alpn_advertised/ech come off the host's HTTPS/SVCB record and
+        // follow the same three-state rule, keyed off whether that record
+        // itself was present, confirmed absent, or unknown — not off
+        // alpn_advertised/ech directly, since those two fields alone cannot
+        // tell "no HTTPS record" apart from "HTTPS record with no ALPN param".
+        var httpsRecords = recordsMap.HTTPS;
+        if (httpsRecords && httpsRecords.length) {
+          var alpn = s.alpn_advertised || [];
+          rows.push(["ALPN advertised (HTTPS record — what the host says it " +
+            "supports, deliberately not what this tool negotiated)", fact(
+            alpn.length ? alpn.join(", ") : "(record present, no ALPN param)", "measured")]);
+          rows.push(["ECH (Encrypted Client Hello) advertised", fact(
+            s.ech === true ? "yes" : s.ech === false ? "no" : "unknown", "measured")]);
+        } else if (recordsMap.hasOwnProperty("HTTPS") && failed.indexOf("HTTPS") === -1) {
+          rows.push(["ALPN / ECH", fact("no HTTPS record published", "measured")]);
+        }
         var timing = s.timing_ms || {};
         rows.push(["Lookup time", fact(joined([
           timing.cold != null ? timing.cold + " ms cold" : null,

@@ -126,20 +126,46 @@ def render_dns(console, trace):
         timing_parts.append(f"{timing['survey_ms']} ms for the full 9-record-type survey")
     timing_text = f"  [dim]({', '.join(timing_parts)})[/dim]" if timing_parts else ""
     tree = Tree(f"[bold]{trace['target']['host']}[/bold]{timing_text}")
-    for rtype, records in (section.get("records") or {}).items():
-        if not records:
-            continue
-        branch = tree.add(f"[cyan]{rtype}[/cyan]")
-        for record in records[:5]:
-            branch.add(f"{record['data']}  [dim]ttl {record['ttl']}[/dim]")
-        if len(records) > 5:
-            branch.add(f"[dim]… {len(records) - 5} more[/dim]")
 
-    # An empty list under a record type means "unknown" for the types listed
-    # here — the query failed — not "this domain publishes none of these".
-    failed = section.get("records_failed") or []
+    # A record type sits in one of three distinct states, and collapsing any
+    # two of them together reintroduces exactly the bug this project keeps
+    # fixing: (1) records present -- list them; (2) the query succeeded and
+    # came back empty -- the zone publishes none of this type, a real,
+    # confirmed measurement; (3) the type is in records_failed -- the query
+    # itself did not complete, so an empty list here means "unknown", not
+    # "none published". Skipping empty-but-succeeded types (as before) made
+    # a confirmed absence look identical to a type that was never queried.
+    records_map = section.get("records") or {}
+    failed = set(section.get("records_failed") or [])
+    for rtype, records in records_map.items():
+        if records:
+            branch = tree.add(f"[cyan]{rtype}[/cyan]  [dim]({len(records)})[/dim]")
+            for record in records:
+                branch.add(f"{record['data']}  [dim]ttl {record['ttl']}[/dim]")
+        elif rtype in failed:
+            tree.add(f"[cyan]{rtype}[/cyan]  [red]unknown — query failed[/red]")
+        else:
+            tree.add(f"[cyan]{rtype}[/cyan]  [dim]none published[/dim]")
+
     if failed:
-        tree.add(f"[red]query failed — no answer for: {', '.join(failed)}[/red]")
+        tree.add(f"[red]query failed — no answer for: {', '.join(sorted(failed))}[/red]")
+
+    # alpn_advertised/ech come off the host's HTTPS/SVCB record and follow the
+    # same three-state rule, keyed off whether that record itself was present,
+    # confirmed absent, or unknown -- not off alpn_advertised/ech directly,
+    # since the collector cannot tell "no HTTPS record" from "HTTPS record
+    # with no ALPN param" in those two fields alone.
+    https_records = records_map.get("HTTPS")
+    if https_records:
+        alpn = section.get("alpn_advertised") or []
+        alpn_text = ", ".join(alpn) if alpn else "(record present, no ALPN param)"
+        ech = section.get("ech")
+        ech_text = "yes" if ech is True else "no" if ech is False else "unknown"
+        tree.add("[dim]ALPN advertised (from the HTTPS record — what the host "
+                  f"says it supports, deliberately not what this tool negotiated): {alpn_text}[/dim]")
+        tree.add(f"[dim]ECH (Encrypted Client Hello) advertised: {ech_text}[/dim]")
+    elif "HTTPS" in records_map and "HTTPS" not in failed:
+        tree.add("[dim]ALPN / ECH: no HTTPS record published[/dim]")
 
     resolver = section.get("resolver") or {}
     footer = f"resolved via {', '.join(resolver.get('servers') or ['unknown'])}"
