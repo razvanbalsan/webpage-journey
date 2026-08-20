@@ -15,21 +15,28 @@ load a webpage — from opposite ends.
 
 ### Homebrew (macOS)
 
-The formula lives in this repo, not a tap, so it is installed from a path rather than by
-name:
+The formula lives in this repo, not a tap, so it is installed from a URL rather than by
+name. Nothing to clone:
+
+```bash
+HOMEBREW_DEVELOPER=1 brew install --formula \
+  https://raw.githubusercontent.com/razvanbalsan/webpage-journey/main/webpage-journey.rb
+
+webpage-journey example.com
+```
+
+The `HOMEBREW_DEVELOPER=1` is not optional on Homebrew 6.x — see the caveats below.
+
+Or from a clone, if you already have one:
 
 ```bash
 git clone https://github.com/razvanbalsan/webpage-journey.git
 cd webpage-journey
-brew install --formula ./webpage-journey.rb
-webpage-journey example.com
+HOMEBREW_DEVELOPER=1 brew install --formula ./webpage-journey.rb
 ```
 
-Or, without cloning first, straight from the raw file on GitHub:
-
-```bash
-brew install --formula https://raw.githubusercontent.com/razvanbalsan/webpage-journey/main/webpage-journey.rb
-```
+The formula builds the tagged release (`v0.1.0`), not your working tree — so a clone that
+is ahead of the tag still installs the tagged code.
 
 A few things worth knowing before you rely on this path:
 
