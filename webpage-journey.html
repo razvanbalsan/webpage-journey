@@ -991,7 +991,8 @@
           return [c.family + " " + c.ip,
                   fact(c.error ? c.error : c.connect_ms + " ms", "measured")];
         });
-        rows.push(["Winner", fact(s.winner_family + " " + (s.chosen || {}).ip, "measured")]);
+        var winnerParts = [s.winner_family, (s.chosen || {}).ip].filter(function (p) { return p; });
+        rows.push(["Winner", fact(winnerParts.length ? winnerParts.join(" ") : null, "measured")]);
         return rows;
       },
       testYourself: function () {
@@ -1087,15 +1088,23 @@
           ["Protocol", fact(s.version, "measured")],
           ["Cipher", fact(s.cipher, "measured")],
           ["ALPN", fact(s.alpn, "measured")],
-          ["Handshake", fact(s.handshake_ms + " ms", "measured")],
+          ["Handshake", fact(s.handshake_ms != null ? s.handshake_ms + " ms" : null, "measured")],
           ["Trusted via", fact(s.trust_root, "measured")],
           ["CAA", fact(s.caa_match === true ? "issuer authorised" :
                        s.caa_match === false ? "issuer NOT listed" : "no comparable record",
                        "measured")]
         ];
         (s.chain || []).forEach(function (c, i) {
-          rows.push(["Cert " + i, fact(c.subject_cn + " ← " + c.issuer_cn +
-                                       " (" + c.days_left + " days left)", "measured")]);
+          // A chain entry can carry neither a Common Name nor an Organization
+          // Name (wj/collect/tls.py's common_name() returns None for both) —
+          // build the name fragment only from what is present, and say so
+          // plainly rather than emitting "null ← ..." or letting the row
+          // vanish with no trace a certificate sits at this position.
+          var names = c.subject_cn && c.issuer_cn ? c.subject_cn + " ← " + c.issuer_cn :
+                      (c.subject_cn || c.issuer_cn || null);
+          var daysText = c.days_left != null ? c.days_left + " days left" : null;
+          var detail = [names, daysText].filter(function (p) { return p; }).join(" · ");
+          rows.push(["Cert " + i, fact(detail || "no fields parsed", "measured")]);
         });
         return rows;
       },
@@ -1232,7 +1241,8 @@
         if (!s) return [];
         var f = s.final || {}, sec = s.security || {};
         return [
-          ["Status", fact(f.protocol + " " + f.status, "measured")],
+          ["Status", fact([f.protocol, f.status != null ? String(f.status) : null]
+            .filter(function (p) { return p; }).join(" ") || null, "measured")],
           ["Content type", fact(f.content_type, "measured")],
           ["On the wire", fact(f.wire_bytes != null ? f.wire_bytes + " bytes" : null, "measured")],
           ["Decoded", fact(f.decoded_bytes != null ? f.decoded_bytes + " bytes" : null, "measured")],
