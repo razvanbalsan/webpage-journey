@@ -15,8 +15,8 @@ def sample_trace():
     leaks have now slipped through this test module because its old fixture
     had no osi/notes/timings/capabilities keys at all, so a guard checking
     "does the redacted document still contain X" never even had X to find in
-    the first place. test_the_leak_fixture_covers_every_key_the_document_carries
-    below makes an incomplete fixture fail loudly instead of silently.
+    the first place. test_the_leak_fixture_populates_every_section below
+    makes an incomplete fixture fail loudly instead of silently.
     """
     trace = schema.new_trace(
         target={"input": "https://example.com/", "host": "example.com",
@@ -91,10 +91,18 @@ def sample_trace():
     return trace
 
 
-def test_the_leak_fixture_covers_every_key_the_document_carries():
-    assert set(sample_trace()) >= set(schema.new_trace(
-        target={}, tool_version="x", generated_at="x",
-        capabilities={}, redacted=False))
+def test_the_leak_fixture_populates_every_section():
+    # A prior version of this assertion checked set(sample_trace()) >=
+    # set(schema.new_trace(...)) -- but since sample_trace() is now built
+    # FROM schema.new_trace(...), that containment holds by construction and
+    # can never fail, even if a newly-added section is left unpopulated (a
+    # re-review proved this by monkeypatching a new section into
+    # schema.SECTIONS: the key was present, carrying nothing, and the
+    # assertion still passed). Checking every section is actually observed --
+    # not merely present as a key -- is what makes an incomplete fixture fail
+    # loudly, which is the whole point of this test.
+    trace = sample_trace()
+    assert all(trace[s]["observed"] for s in schema.SECTIONS)
 
 
 def test_sample_trace_validates():
@@ -211,6 +219,18 @@ def test_a_malformed_hop_address_is_redacted_rather_than_published():
 
 MAC_RE = re.compile(r"\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b")
 IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# Covers full 8-group form, "::"-compressed forms at any position, and bare
+# "::1" -- deliberately permissive (a false-positive match that fails to
+# parse as a real IP address is filtered out below by ipaddress.ip_address's
+# ValueError, same as IPV4_RE already relies on for e.g. version strings).
+# A re-review caught that the walker was IPv4-only, silently passing an
+# IPv6 leak (link-local fe80::/10, ULA fd00::/8) straight through.
+IPV6_RE = re.compile(
+    r"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b"
+    r"|\b(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,5})?\b"
+    r"|\B::(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}\b"
+    r"|\b[0-9a-fA-F]{1,4}::\B"
+)
 
 # Explicit allowlist: values that are non-global IPs / MAC-shaped but are not
 # an identifier leak (none currently -- kept empty and named so the next
@@ -230,16 +250,42 @@ def _iter_strings(value):
         yield value
 
 
-def test_redacted_document_has_no_mac_or_private_ip_anywhere_structurally():
-    out = redact.redact_trace(sample_trace())
-    for text in _iter_strings(out):
+def find_leaks(document):
+    """Return a list of (text, offending value) for every MAC or non-global
+    IPv4/IPv6 address found anywhere in the document, recursively."""
+    violations = []
+    for text in _iter_strings(document):
         for mac in MAC_RE.findall(text):
-            assert mac in ALLOWED_NON_GLOBAL, f"MAC address leaked in {text!r}"
-        for ip in IPV4_RE.findall(text):
+            if mac not in ALLOWED_NON_GLOBAL:
+                violations.append((text, mac))
+        for ip in IPV4_RE.findall(text) + IPV6_RE.findall(text):
             if ip in ALLOWED_NON_GLOBAL:
                 continue
             try:
                 is_global = ipaddress.ip_address(ip).is_global
             except ValueError:
                 continue
-            assert is_global, f"non-global IP leaked in {text!r}"
+            if not is_global:
+                violations.append((text, ip))
+    return violations
+
+
+def test_redacted_document_has_no_mac_or_private_ip_anywhere_structurally():
+    out = redact.redact_trace(sample_trace())
+    leaks = find_leaks(out)
+    assert leaks == [], leaks
+
+
+def test_structural_leak_walker_catches_a_ula_ipv6_address_planted_in_a_note():
+    # redact.redact_trace() only ever touches the structured local/tcp/dns/path
+    # fields -- it does not scrub free-text note content at all. Planting a
+    # ULA IPv6 address in a note demonstrates the one channel the general
+    # redaction path cannot reach, and proves the walker itself (once IPv6
+    # matching exists) still catches it there.
+    trace = sample_trace()
+    trace["notes"].append({"severity": "info", "section": "path",
+                           "text": "a hop responded from fd12:3456:789a::1"})
+    out = redact.redact_trace(trace)
+
+    leaks = find_leaks(out)
+    assert any("fd12:3456:789a::1" == offender for _text, offender in leaks), leaks

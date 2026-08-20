@@ -64,6 +64,18 @@ def test_caa_allows_a_bare_google_trust_services_code_is_unknown_not_false(cn):
     assert tls_collect.caa_allows(caa, cn, "Google Trust Services") is None
 
 
+@pytest.mark.parametrize("cn", ["WR2", "WE1", "GTS CA 1C3", "WE2"])
+def test_caa_allows_a_bare_google_trust_services_code_with_no_org_is_unknown(cn):
+    # Same codes as above but with NO Organization attached at all -- this is
+    # the shape a re-review caught: "GTS CA 1C3" alone contains the 3-letter
+    # run "gts", which used to satisfy the old comparability guard and fall
+    # through the brand check (no label of "pki.goog" appears in "gtsca1c3")
+    # to a spurious False. Multi-token bare codes made only of short,
+    # code-like tokens must be judged incomparable regardless of Organization.
+    caa = [{"data": '0 issue "pki.goog"', "ttl": 300}]
+    assert tls_collect.caa_allows(caa, cn, None) is None
+
+
 def test_caa_allows_a_bare_code_with_no_organization_at_all_is_unknown():
     caa = [{"data": '0 issue "letsencrypt.org"', "ttl": 300}]
     assert tls_collect.caa_allows(caa, "R11", None) is None
@@ -75,6 +87,44 @@ def test_caa_allows_a_genuine_mismatch_still_returns_false():
     caa = [{"data": '0 issue "letsencrypt.org"', "ttl": 300}]
     assert tls_collect.caa_allows(caa, "DigiCert SHA2 Secure Server CA",
                                   "DigiCert Inc") is False
+
+
+@pytest.mark.parametrize("caa_domain,issuer_cn,issuer_org", [
+    # Both fail SAFE today (None, not a false accusation) because the brand
+    # check has no minimum label length -- "it" matches inside "...Limited",
+    # "de" matches inside "IdenTrust". A minimum length of 3 closes both
+    # while still keeping "goog" (4 chars). Kept here as parametrized cases so
+    # the False branch stays demonstrably alive for a genuine mismatch against
+    # a real two-letter-ccTLD CAA domain.
+    ("actalis.it", "Sectigo RSA Domain Validation Secure Server CA", "Sectigo Limited"),
+    ("telesec.de", "IdenTrust Commercial Root CA 1", "IdenTrust"),
+])
+def test_caa_allows_does_not_brand_match_on_a_bare_two_letter_cctld(caa_domain, issuer_cn, issuer_org):
+    caa = [{"data": f'0 issue "{caa_domain}"', "ttl": 300}]
+    assert tls_collect.caa_allows(caa, issuer_cn, issuer_org) is False
+
+
+def test_caa_allows_strips_rfc_8659_parameters_before_comparing():
+    # RFC 8659 §4.2 allows semicolon-separated parameters after the issuer
+    # domain -- "pki.goog; cansignhttpexchanges=yes" is real, live CAA data
+    # (verified against cloudflare.com on 2026-08-20). Comparing the whole
+    # quoted string, parameters included, normalises to noise that can never
+    # brand-match -- a real certificate then reads as a misissuance warning.
+    caa = [{"data": '0 issue "pki.goog; cansignhttpexchanges=yes"', "ttl": 300}]
+    assert tls_collect.caa_allows(caa, "WE1", "Google Trust Services") is None
+
+    # A genuine mismatch must still be caught with parameters present.
+    assert tls_collect.caa_allows(caa, "DigiCert SHA2 Secure Server CA",
+                                  "DigiCert Inc") is False
+
+
+def test_caa_allows_strips_accounturi_and_validationmethods_parameters():
+    # accounturi= (ACME account pinning, common for Let's Encrypt) and
+    # validationmethods= are equally common in the wild -- not a corner case.
+    caa = [{"data": '0 issue "letsencrypt.org; accounturi=https://acme-v02.'
+                    'api.letsencrypt.org/acme/acct/12345678; '
+                    'validationmethods=http-01"', "ttl": 300}]
+    assert tls_collect.caa_allows(caa, "R11", "Let's Encrypt") is None
 
 
 def test_summarise_cert_reads_issuer_organization():

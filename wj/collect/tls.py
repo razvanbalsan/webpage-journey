@@ -109,12 +109,28 @@ def caa_allows(caa_records, issuer_cn, issuer_org=None):
     for record in caa_records:
         match = re.search(r'issue(?:wild)?\s+"([^"]+)"', record.get("data", ""))
         if match:
-            issuers.append(match.group(1).lower())
+            # RFC 8659 §4.2 allows semicolon-separated parameters after the
+            # issuer domain itself ("pki.goog; cansignhttpexchanges=yes",
+            # "letsencrypt.org; accounturi=...; validationmethods=...") — both
+            # are common in the wild. Only the domain, the first field, is
+            # ever compared; a parameter blob folded into the whole quoted
+            # string normalises to noise that can never brand-match.
+            issuer_domain = match.group(1).split(";", 1)[0].strip().lower()
+            if issuer_domain:
+                issuers.append(issuer_domain)
     if not issuers:
         return None
     haystack = " ".join(p for p in (issuer_cn, issuer_org) if p).lower()
-    if not re.search(r"[a-z]{3,}", haystack):
-        return None  # a bare CA code ("R11", "WE1") is not comparable to a domain
+    # A bare CA code is not comparable to a domain -- but the comparability
+    # check has to be a real WORD, not just any run of 3+ letters: "GTS CA
+    # 1C3" (no Organization attached) contains the 3-letter run "gts" and
+    # would otherwise sail through as "comparable" while still being three
+    # short, code-like tokens with nothing brand-like in them. Requiring 4+
+    # consecutive letters excludes that shape while every genuine brand word
+    # used elsewhere in this function ("letsencrypt", "google", "sectigo",
+    # "digicert", ...) is well over that length.
+    if not re.search(r"[a-z]{4,}", haystack):
+        return None  # a bare CA code ("R11", "WE1", "GTS CA 1C3") is not comparable
     if any(i in haystack for i in issuers):
         return True
     # A CA's issuer_cn/issuer_org (e.g. "Let's Encrypt") rarely spells its CAA
@@ -124,14 +140,17 @@ def caa_allows(caa_records, issuer_cn, issuer_org=None):
     # first ("pki"), and a first-label-only check returns a false "False" against
     # a real, live "Google Trust Services"-issued certificate (verified against
     # google.com). "com"/"org"/"net"/"www" are excluded as too generic to prove
-    # anything on their own.
+    # anything on their own, and every label under 3 characters is excluded too
+    # -- "actalis.it" and "telesec.de" otherwise brand-match on their bare
+    # ccTLD ("it" inside "...Limited", "de" inside "IdenTrust"), which is a
+    # spurious None, not a real brand plausibility.
     normalized_haystack = re.sub(r"[^a-z0-9]", "", haystack)
     generic_labels = {"com", "org", "net", "co", "www"}
     brands = []
     for i in issuers:
         for label in i.split("."):
             label = re.sub(r"[^a-z0-9]", "", label)
-            if label and label not in generic_labels and label not in brands:
+            if len(label) >= 3 and label not in generic_labels and label not in brands:
                 brands.append(label)
     if any(brand in normalized_haystack for brand in brands):
         return None  # plausible match on the brand alone — not proof either way
