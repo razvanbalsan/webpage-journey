@@ -610,6 +610,36 @@
     font-size: 11px; padding: 4px 8px; cursor: pointer; margin-top: 4px;
     white-space: nowrap;
   }
+
+  .trace-panels { display: none; margin-bottom: 22px; }
+  .trace-panels.show { display: block; }
+
+  .findings-panel, .waterfall-panel {
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 14px 16px; margin-bottom: 14px;
+  }
+  .findings-panel h3, .waterfall-panel h3 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
+    margin: 0 0 10px; color: var(--text-muted);
+  }
+  .finding { display: flex; gap: 10px; align-items: baseline;
+             font-size: 13px; padding: 5px 0;
+             border-top: 1px solid var(--border); }
+  .finding:first-of-type { border-top: none; }
+  .sev {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.04em; padding: 2px 6px; border-radius: 3px;
+    color: #fff; flex: none; min-width: 58px; text-align: center;
+  }
+  .sev-critical { background: var(--critical); }
+  .sev-warn     { background: var(--l4); }
+  .sev-info     { background: var(--l7); }
+  .finding .where { color: var(--text-muted); font-size: 11px; flex: none; }
+
+  .waterfall-scroll { overflow-x: auto; }
+  .waterfall-svg { display: block; min-width: 420px; }
+  .waterfall-svg text { font-size: 11px; fill: var(--text-secondary); }
+  .waterfall-svg text.total { fill: var(--text-primary); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -658,6 +688,11 @@
   </div>
 
   <div class="trace-bar" id="traceBar"></div>
+
+  <div class="trace-panels" id="tracePanels">
+    <div class="findings-panel" id="findingsPanel"></div>
+    <div class="waterfall-panel" id="waterfallPanel"></div>
+  </div>
 
   <div class="live-panel" id="livePanel">
     <div class="live-panel-head">
@@ -785,6 +820,9 @@
     state.trace = trace;
     try { localStorage.setItem(TRACE_STORAGE_KEY, JSON.stringify(trace)); } catch (e) {}
     renderTraceBar();
+    document.getElementById("tracePanels").classList.add("show");
+    renderFindings();
+    renderWaterfall();
     refreshAllBodies();
   }
 
@@ -815,6 +853,64 @@
       (t.redacted ? " · exported with redaction" : "") +
       (unobserved.length ? "<br>not observed — " + escapeHtml(unobserved.join(" · ")) : "") +
       "</div>";
+  }
+
+  var WATERFALL_COLOURS = {
+    DNS: "--l7", TCP: "--l4", TLS: "--l6", TTFB: "--l3", Download: "--l5"
+  };
+
+  function renderFindings() {
+    var panel = document.getElementById("findingsPanel");
+    var notes = ((state.trace && state.trace.notes) || []).slice();
+    var order = { critical: 0, warn: 1, info: 2 };
+    notes.sort(function (a, b) { return (order[a.severity] || 9) - (order[b.severity] || 9); });
+
+    if (!notes.length) {
+      panel.innerHTML = "<h3>Findings</h3>" +
+        '<p style="font-size:13px;color:var(--good);margin:0">' +
+        "Nothing worth flagging in this trace.</p>";
+      return;
+    }
+
+    panel.innerHTML = "<h3>Findings (" + notes.length + ")</h3>" +
+      notes.map(function (n) {
+        return '<div class="finding">' +
+          '<span class="sev sev-' + escapeHtml(n.severity) + '">' + escapeHtml(n.severity) + "</span>" +
+          '<span class="where">' + escapeHtml(n.section) + "</span>" +
+          "<span>" + escapeHtml(n.text) + "</span></div>";
+      }).join("");
+  }
+
+  function renderWaterfall() {
+    var panel = document.getElementById("waterfallPanel");
+    var timings = (state.trace && state.trace.timings) || {};
+    var rows = timings.waterfall || [];
+    var total = timings.total_ms || 0;
+
+    if (!rows.length || total <= 0) { panel.innerHTML = ""; return; }
+
+    var rowH = 24, labelW = 90, timeW = 74, barW = 360;
+    var height = rows.length * rowH + 34;
+    var width = labelW + barW + timeW;
+
+    var bars = rows.map(function (r, i) {
+      var y = i * rowH + 6;
+      var x = labelW + (r.start_ms / total) * barW;
+      var w = Math.max(2, ((r.end_ms - r.start_ms) / total) * barW);
+      var colour = "var(" + (WATERFALL_COLOURS[r.label] || "--l7") + ")";
+      return '<text x="0" y="' + (y + 13) + '">' + escapeHtml(r.label) + "</text>" +
+             '<rect x="' + x.toFixed(1) + '" y="' + y + '" width="' + w.toFixed(1) +
+             '" height="14" rx="2" fill="' + colour + '"></rect>' +
+             '<text x="' + (labelW + barW + 8) + '" y="' + (y + 13) + '">' +
+             (r.end_ms - r.start_ms).toFixed(1) + " ms</text>";
+    }).join("");
+
+    panel.innerHTML = "<h3>Timing waterfall</h3>" +
+      '<div class="waterfall-scroll"><svg class="waterfall-svg" width="' + width +
+      '" height="' + height + '" role="img" aria-label="Timing waterfall, total ' +
+      total + ' milliseconds">' + bars +
+      '<text class="total" x="0" y="' + (height - 6) + '">Total ' + total + " ms</text>" +
+      "</svg></div>";
   }
 
   function wireTraceImport() {
@@ -1920,6 +2016,11 @@
     liveData = null;
     liveState = "idle";
     document.getElementById("livePanel").classList.remove("show");
+
+    state.trace = null;
+    try { localStorage.removeItem(TRACE_STORAGE_KEY); } catch (e) {}
+    document.getElementById("tracePanels").classList.remove("show");
+    renderTraceBar();
   });
 
   // ---------------- Theme toggle ----------------
@@ -1949,7 +2050,13 @@
     var stored = localStorage.getItem(TRACE_STORAGE_KEY);
     if (stored) {
       var restored = importTraceText(stored);
-      if (restored.ok) { state.trace = restored.trace; renderTraceBar(); }
+      if (restored.ok) {
+        state.trace = restored.trace;
+        renderTraceBar();
+        document.getElementById("tracePanels").classList.add("show");
+        renderFindings();
+        renderWaterfall();
+      }
     }
   } catch (e) {}
 
