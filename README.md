@@ -51,9 +51,6 @@ A few things worth knowing before you rely on this path:
 - **`brew upgrade` does work**, because the repo is tapped rather than installed from a
   loose file. `brew update && brew upgrade razvanbalsan/webpage-journey/webpage-journey`
   picks up a newer tag once one is pushed.
-- **Recent Homebrew (6.x) requires developer mode for path/URL installs.** If the command
-  above is refused with "Homebrew requires formulae to be in a tap", re-run it with
-  `HOMEBREW_DEVELOPER=1 brew install --formula ./webpage-journey.rb`.
 - **The first install builds `cryptography` from source**, which needs a Rust toolchain.
   Homebrew will pull in `rust` (and its own build dependencies) automatically the first
   time this formula — or anything else that needs `cryptography` built this way — is
