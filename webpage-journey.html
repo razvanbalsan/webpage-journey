@@ -583,6 +583,8 @@
     margin-bottom: 18px;
   }
   body.dragging .drop-hint { border-color: var(--good); color: var(--text-primary); }
+  .drop-error { display: block; margin-top: 6px; color: var(--critical); }
+  .drop-error:empty { display: none; }
 </style>
 </head>
 <body>
@@ -627,6 +629,7 @@
   <div class="drop-hint" id="dropHint">
     Drop a <code>trace.json</code> here (or <label class="visually-hidden" for="traceFile">choose a trace file</label><input type="file" id="traceFile" accept=".json,application/json">) to replace the illustrative values with real measurements from
     <code>python3 trace.py example.com --json trace.json</code>.
+    <span class="drop-error" id="dropError" role="status" aria-live="polite"></span>
   </div>
 
   <div class="trace-bar" id="traceBar"></div>
@@ -790,18 +793,18 @@
   }
 
   function wireTraceImport() {
-    var hint = document.getElementById("dropHint");
     var input = document.getElementById("traceFile");
+    var errorEl = document.getElementById("dropError");
 
     function load(file) {
       var reader = new FileReader();
       reader.onload = function () {
         var result = importTraceText(String(reader.result));
         if (result.ok) {
+          errorEl.textContent = "";
           adoptTrace(result.trace);
         } else {
-          hint.innerHTML = '<span style="color:var(--critical)">' +
-                           escapeHtml(result.error) + "</span>";
+          errorEl.textContent = result.error;
         }
       };
       reader.readAsText(file);
