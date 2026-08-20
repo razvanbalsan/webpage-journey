@@ -147,7 +147,14 @@ def build_osi(trace):
         if (tls.get("resumption") or {}).get("resumed"):
             l5_facts.append("resumed from a session ticket")
     if http.get("observed"):
-        l5_facts.append(f"{len(http.get('hops', [])) + 1} request(s) over this connection")
+        # Every redirect hop opens a fresh connection (wj/collect/http.py sets
+        # sock = None before the next hop's fetch, and every request sends
+        # Connection: close) -- N+1 requests went over N+1 DIFFERENT
+        # connections, never one shared connection carrying all of them.
+        hops = http.get("hops") or []
+        l5_facts.append("1 request over this connection")
+        if hops:
+            l5_facts.append(f"{len(hops)} redirect(s), each on a new connection")
 
     final = http.get("final") or {}
     l6_facts = []

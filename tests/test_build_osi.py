@@ -166,6 +166,30 @@ def test_gateway_mac_with_absent_gateway_ip_never_fabricates_a_none_fact():
     assert "gateway MAC" not in joined
 
 
+def test_layer_five_does_not_claim_redirects_shared_one_connection():
+    # C6: every redirect hop opens a fresh connection (wj/collect/http.py sets
+    # sock = None before the next hop's fetch, and every request sends
+    # Connection: close) -- the old wording, "N+1 request(s) over this
+    # connection", asserted the opposite of what the collector actually does.
+    trace = full_trace()
+    trace["http"]["hops"] = [{"status": 301}, {"status": 302}]
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l5"]["facts"])
+    assert "over this connection" in joined
+    assert "3 request" not in joined
+    assert "1 request over this connection" in joined
+    assert "2 redirect(s), each on a new connection" in joined
+
+
+def test_layer_five_with_no_redirects_does_not_mention_redirects():
+    trace = full_trace()
+    trace["http"]["hops"] = []
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l5"]["facts"])
+    assert "1 request over this connection" in joined
+    assert "redirect" not in joined
+
+
 def test_all_optional_sub_fields_none_never_prints_the_literal_none():
     trace = full_trace()
     trace["local"].update(link=None, mtu=None, local_ip=None, local_mac=None,
