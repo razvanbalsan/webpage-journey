@@ -585,6 +585,31 @@
   body.dragging .drop-hint { border-color: var(--good); color: var(--text-primary); }
   .drop-error { display: block; margin-top: 6px; color: var(--critical); }
   .drop-error:empty { display: none; }
+
+  .fact-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 10px 18px;
+    margin: 12px 0 4px;
+  }
+  .fact-grid .k {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-muted); margin-bottom: 2px;
+  }
+  .fact-grid .v {
+    font-family: ui-monospace, monospace; font-size: 12px;
+    color: var(--text-primary); word-break: break-word;
+  }
+  .breaks { margin: 10px 0 0; padding-left: 18px; font-size: 12.5px; }
+  .breaks li { margin-bottom: 3px; }
+  .copy-row { display: flex; gap: 8px; align-items: flex-start; }
+  .copy-row code.block { flex: 1; margin-top: 4px; }
+  .copy-btn {
+    border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-secondary); border-radius: 4px;
+    font-size: 11px; padding: 4px 8px; cursor: pointer; margin-top: 4px;
+    white-space: nowrap;
+  }
 </style>
 </head>
 <body>
@@ -833,96 +858,529 @@
     });
   }
 
+  function host() {
+    return (state.trace && state.trace.target && state.trace.target.host) ||
+           (liveData && liveData.host) || parseHostFromInput(urlInput.value) || "example.com";
+  }
+
+  function targetIp() {
+    var tcp = traceSection("tcp");
+    if (tcp && tcp.chosen) return tcp.chosen.ip;
+    if (liveData && liveData.targetIp) return liveData.targetIp;
+    return "93.184.216.34";
+  }
+
   var JOURNEY = [
     {
+      key: "enter",
       phase: "Before anything leaves your machine",
       title: "You hit Enter",
       simple: "Your browser checks whether it already knows the answer before doing any network work at all.",
-      technical: "The browser checks its HTTP cache for a fresh, unexpired response to this exact URL, checks the HSTS preload list to see if it must force HTTPS, and &mdash; if a Service Worker is registered for this origin &mdash; may let that script answer from its own cache with zero network traffic.",
+      technical: "The browser checks its HTTP cache for a fresh, unexpired response to this exact URL, checks the HSTS preload list to see if it must force HTTPS, and — if a Service Worker is registered for this origin — may let that script answer from its own cache with zero network traffic.",
       layers: [],
-      pos: 2
+      pos: 2,
+      bind: function () { return []; },
+      testYourself: function () {
+        return "# In DevTools: Network tab → disable cache, then compare load times\n" +
+               "# Chrome's HSTS state:  chrome://net-internals/#hsts";
+      },
+      whatBreaks: [
+        "A stale cached response keeps serving after a deploy — usually a Cache-Control mistake, not a network fault.",
+        "A buggy Service Worker answers from its own cache and the network is never consulted at all."
+      ]
     },
     {
+      key: "local",
+      phase: "Leaving your machine",
+      title: "Your local network",
+      simple: "Before anything can travel, your computer has to hand the data to the one device on your local network that knows how to reach the outside world: your router.",
+      technical: "Your OS looks up the route for the destination address and picks an egress interface. Because the destination is not on your subnet, the packet is addressed at Layer 3 to the server, but the Ethernet or Wi-Fi frame carrying it is addressed at Layer 2 to your <strong>default gateway's MAC address</strong>, which ARP resolved and cached. That is the single most useful thing to understand about L2: frames are addressed hop by hop, packets end to end. Your DHCP lease is what told your machine its address, its gateway, and which resolver to ask. Almost every home and office network then applies NAT, so your private RFC 1918 address is rewritten to one public address on the way out.",
+      code: "Route for 93.184.216.34:\n  interface en0, gateway 192.168.1.1\n\nFrame leaving your NIC:\n  dst MAC 11:22:33:44:55:66   <- your router, NOT the server\n  src MAC aa:bb:cc:dd:ee:ff\n    IP packet inside:\n      src 192.168.1.23  dst 93.184.216.34\n\nNAT rewrites the source on the way out:\n  192.168.1.23  ->  81.180.20.7",
+      layers: [ {n:2,w:"primary"}, {n:1,w:"primary"}, {n:3,w:"secondary"} ],
+      pos: 6,
+      bind: function () {
+        var s = traceSection("local");
+        if (!s) return [];
+        return [
+          ["Interface", fact(s.interface, "measured")],
+          ["Link", fact(s.link, "measured")],
+          ["MTU", fact(s.mtu, "measured")],
+          ["Your address", fact(s.local_ip, "measured")],
+          ["Your MAC", fact(s.local_mac, "measured")],
+          ["Gateway", fact(s.gateway_ip, "measured")],
+          ["Gateway MAC", fact(s.gateway_mac, "measured")],
+          ["Public address", fact(s.public_ip, "measured")],
+          ["NAT", fact(s.nat ? "yes" : "no", "measured")]
+        ];
+      },
+      testYourself: function () {
+        var s = traceSection("local");
+        var gw = (s && s.gateway_ip) || "192.168.1.1";
+        return "route -n get " + targetIp() + "     # macOS: which interface and gateway\n" +
+               "ip route get " + targetIp() + "     # Linux: the same question\n" +
+               "arp -n " + gw + "            # the MAC your frames are actually addressed to";
+      },
+      whatBreaks: [
+        "Cable unplugged or Wi-Fi dropped — L1. Nothing above this can work.",
+        "No DHCP lease, so no address and no gateway — you are on the network but cannot address anyone.",
+        "Wrong gateway or a poisoned ARP cache — frames leave, but to the wrong device.",
+        "MTU mismatch on a VPN: small requests work, large responses hang."
+      ]
+    },
+    {
+      key: "dns",
       phase: "Finding the address",
       title: "DNS Resolution",
       simple: "Your computer translates the human-readable domain name into a numeric IP address, the same way you'd look up a phone number by a name.",
-      technical: "Checks cascade in order: browser DNS cache &rarr; OS resolver cache &rarr; hosts file &rarr; configured recursive resolver (your ISP, or a public one like 1.1.1.1 / 8.8.8.8). If nothing is cached, the resolver walks the hierarchy: root server &rarr; TLD server (.com) &rarr; authoritative nameserver for the domain, which returns the A record (IPv4) or AAAA record (IPv6). The result is cached locally for its TTL &mdash; here, 300 seconds &mdash; so a second visit within that window skips the lookup entirely. The address returned is almost always a <em>public</em> IP owned by a CDN or cloud provider's edge network; once the request is inside that provider, it's often re-routed across private RFC&nbsp;1918 space (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 &mdash; the same private ranges from CIDR subnetting) to reach the actual backend.",
-      code: "; type  ttl  class  data\nexample.com.  300  IN  A     93.184.216.34\nexample.com.  300  IN  AAAA  2606:2800:220:1:248:1893:25c8:1946\n\n; a CNAME chain looks like:\nwww.example.com.  300  IN  CNAME  example.com.\nexample.com.       300  IN  A      93.184.216.34",
+      technical: "Checks cascade in order: browser DNS cache → OS resolver cache → hosts file → configured recursive resolver (your ISP, or a public one like 1.1.1.1 / 8.8.8.8). If nothing is cached, the resolver walks the hierarchy: root server → TLD server (.com) → authoritative nameserver for the domain, which returns the A record (IPv4) or AAAA record (IPv6). The result is cached locally for its TTL, so a second visit within that window skips the lookup entirely. Two records worth knowing beyond A/AAAA: <strong>CAA</strong> names which certificate authorities may issue for this domain, and the <strong>HTTPS/SVCB</strong> record advertises HTTP/3 support and Encrypted Client Hello before the first connection is even made. If the answer is signed and your resolver validates it, <strong>DNSSEC</strong> sets the AD bit — otherwise the answer is simply trusted.",
       layers: [ {n:7,w:"primary"}, {n:4,w:"secondary"}, {n:3,w:"secondary"} ],
-      pos: 12
+      pos: 12,
+      bind: function () {
+        var s = traceSection("dns");
+        if (!s) return [];
+        var rows = [];
+        var failed = s.records_failed || [];
+        Object.keys(s.records || {}).forEach(function (rtype) {
+          var list = s.records[rtype];
+          if (list && list.length) {
+            rows.push([rtype, fact(list.map(function (r) { return r.data; }).join(", "), "measured")]);
+          }
+        });
+        if (failed.length) {
+          // An empty list under a record type above means "unknown, the query
+          // failed" for these types specifically — not "this domain publishes none".
+          rows.push(["Query failed", fact("no answer for: " + failed.join(", ") +
+            " — unknown, not confirmed absent", "measured")]);
+        }
+        var aRec = (s.records.A || [])[0];
+        rows.push(["TTL", fact(aRec ? aRec.ttl + "s" : null, "measured")]);
+        rows.push(["Resolver", fact(((s.resolver || {}).servers || []).join(", "), "measured")]);
+        rows.push(["DNSSEC", fact(s.dnssec, "measured")]);
+        rows.push(["Advertised ALPN", fact(
+          failed.indexOf("HTTPS") !== -1 ? null : ((s.alpn_advertised || []).join(", ") || "none published"),
+          "measured")]);
+        rows.push(["Lookup time", fact((s.timing_ms || {}).cold + " ms cold, " +
+                                       (s.timing_ms || {}).warm + " ms warm", "measured")]);
+        return rows;
+      },
+      testYourself: function () {
+        return "dig +short " + host() + " A AAAA\n" +
+               "dig +dnssec " + host() + " | grep -q ' ad ' && echo signed\n" +
+               "dig " + host() + " HTTPS      # HTTP/3 and ECH advertisement\n" +
+               "dig +trace " + host() + "     # walk root -> TLD -> authoritative";
+      },
+      whatBreaks: [
+        "NXDOMAIN — the name does not exist. Check spelling and registration before anything else.",
+        "The name resolves but to a stale IP: someone changed a record and the old TTL is still cached.",
+        "Split-horizon DNS or a VPN resolver returns an internal address you cannot reach.",
+        "The resolver itself is unreachable — everything fails at once, and it looks like the whole internet is down."
+      ]
     },
     {
+      key: "address",
+      phase: "Picking a route",
+      title: "Choosing an address",
+      simple: "A domain often resolves to several addresses. Your browser races them and uses whichever answers first.",
+      technical: "This is <strong>Happy Eyeballs</strong> (RFC 8305). Given both AAAA and A records, the client starts an IPv6 connection first, then starts an IPv4 attempt a short time later rather than waiting for IPv6 to time out — and uses whichever completes first. It is why a broken IPv6 path costs you milliseconds instead of thirty seconds. When a domain returns several addresses, they are usually <strong>anycast</strong> edges of a CDN: the same address is announced from many locations, and routing decides which one you actually reach. Comparing connect times across the returned addresses tells you whether you are hitting one origin server or a distributed edge.",
+      layers: [ {n:4,w:"primary"}, {n:3,w:"primary"} ],
+      pos: 18,
+      bind: function () {
+        var s = traceSection("tcp");
+        if (!s) return [];
+        var rows = (s.candidates || []).map(function (c) {
+          return [c.family + " " + c.ip,
+                  fact(c.error ? c.error : c.connect_ms + " ms", "measured")];
+        });
+        rows.push(["Winner", fact(s.winner_family + " " + (s.chosen || {}).ip, "measured")]);
+        return rows;
+      },
+      testYourself: function () {
+        return "curl -sS -o /dev/null -w '%{time_connect}s via %{remote_ip}\\n' -6 https://" + host() + "/\n" +
+               "curl -sS -o /dev/null -w '%{time_connect}s via %{remote_ip}\\n' -4 https://" + host() + "/";
+      },
+      whatBreaks: [
+        "IPv6 is advertised but unroutable on your network — Happy Eyeballs hides it, so it stays broken and invisible for years.",
+        "One anycast edge is unhealthy: some users see failures and others do not, from the same address.",
+        "A host publishes only an A record, so IPv6-only clients cannot reach it at all."
+      ]
+    },
+    {
+      key: "path",
+      phase: "Crossing the internet",
+      title: "Crossing the internet",
+      simple: "Your request is passed from router to router across many separate networks until it reaches the one that hosts the site.",
+      technical: "No single organisation carries your packet end to end. It crosses a sequence of <strong>autonomous systems</strong> — your ISP, one or more transit providers, then the destination's network or CDN — each making its own independent routing decision with BGP. Traceroute reveals that sequence by sending packets with deliberately small TTLs and reading who sends back the expiry message. Two things matter operationally: the RTT growth between hops tells you where latency is actually introduced, and the AS numbers tell you whose network to contact when a hop is the problem. The <strong>path MTU</strong> is the smallest link along the way; exceed it with the don't-fragment bit set and packets vanish silently.",
+      layers: [ {n:3,w:"primary"}, {n:2,w:"secondary"} ],
+      pos: 26,
+      bind: function () {
+        var s = traceSection("path");
+        if (!s) return [];
+        var rows = (s.hops || []).map(function (h) {
+          return ["Hop " + h.ttl,
+                  fact((h.ip || "* no reply") +
+                       (h.rtt_ms ? "  " + h.rtt_ms + " ms" : "") +
+                       (h.asn ? "  AS" + h.asn : ""), "measured")];
+        });
+        if ((s.asn_path || []).length) {
+          rows.push(["AS path", fact(s.asn_path.map(function (n) { return "AS" + n; }).join(" → "), "measured")]);
+        }
+        if (s.path_mtu) rows.push(["Path MTU", fact(s.path_mtu, "measured")]);
+        return rows;
+      },
+      testYourself: function () {
+        return "traceroute " + host() + "\n" +
+               "mtr " + host() + "            # traceroute plus continuous loss statistics\n" +
+               "ping -D -s 1472 " + host() + " # probe path MTU (macOS)";
+      },
+      whatBreaks: [
+        "A transit provider has a bad link: latency triples for some users and is fine for others.",
+        "Asymmetric routing means the return path differs from the outbound one — traceroute only shows you half the story.",
+        "A firewall drops ICMP, so hops show as `* * *` while real traffic passes fine. Missing hops are not necessarily a fault.",
+        "Path MTU black holes: the handshake succeeds and the first large response hangs forever."
+      ]
+    },
+    {
+      key: "tcp",
       phase: "Opening the pipe",
       title: "TCP Connection",
       simple: "Your browser and the server do a quick three-step handshake to confirm they're both ready to talk reliably.",
-      technical: "SYN &rarr; SYN-ACK &rarr; ACK. This establishes a reliable, ordered, bidirectional byte stream on top of unreliable IP: lost packets are retransmitted, and out-of-order packets are reassembled before your app ever sees them. Your OS picks a random unused local <strong>ephemeral port</strong> (roughly 32768&ndash;60999) for the client side, while the server listens on a well-known port &mdash; 443 for HTTPS, 80 for HTTP. That client-IP:port + server-IP:port pair is a full TCP connection; the same client can hold thousands of simultaneous connections to different servers because each pair is unique.<br><br><strong>TCP vs. UDP:</strong> TCP trades speed for reliability, so it's the default for HTTP/1.1 and HTTP/2. UDP has no handshake, ordering, or retransmission &mdash; it just fires packets and hopes. That statelessness is exactly why DNS queries typically use UDP (one quick round trip, retry if nothing comes back) and why QUIC, the transport under HTTP/3, is built on UDP too: it re-implements reliability itself, but avoids TCP's head-of-line blocking, where one lost packet stalls every stream on the connection.",
-      code: "Client 203.0.113.42:54213  →  Server 93.184.216.34:443\n\nClient → SYN         (seq=1000)\nServer → SYN, ACK    (seq=5000, ack=1001)\nClient → ACK         (ack=5001)\n\n[connection established — data can now flow both ways]",
-      layers: [ {n:4,w:"primary"}, {n:3,w:"secondary"}, {n:2,w:"secondary"}, {n:1,w:"secondary"} ],
-      pos: 24
+      technical: "SYN → SYN-ACK → ACK. This establishes a reliable, ordered, bidirectional byte stream on top of unreliable IP: lost packets are retransmitted, and out-of-order packets are reassembled before your app ever sees them. Your OS picks a random unused local <strong>ephemeral port</strong> (roughly 32768–60999) for the client side, while the server listens on a well-known port — 443 for HTTPS, 80 for HTTP. That client-IP:port + server-IP:port pair is a full TCP connection; the same client can hold thousands of simultaneous connections to different servers because each pair is unique.<br><br><strong>TCP vs. UDP:</strong> TCP trades speed for reliability, so it's the default for HTTP/1.1 and HTTP/2. UDP has no handshake, ordering, or retransmission — it just fires packets and hopes. That statelessness is exactly why DNS queries typically use UDP and why QUIC, the transport under HTTP/3, is built on UDP too: it re-implements reliability itself, but avoids TCP's head-of-line blocking, where one lost packet stalls every stream on the connection.",
+      layers: [ {n:4,w:"primary"}, {n:3,w:"secondary"} ],
+      pos: 32,
+      bind: function () {
+        var s = traceSection("tcp");
+        if (!s) return [];
+        var k = s.kernel || {};
+        return [
+          ["Client", fact((s.local || {}).ip + ":" + (s.local || {}).port, "measured")],
+          ["Server", fact((s.chosen || {}).ip + ":" + (s.chosen || {}).port, "measured")],
+          ["Round-trip time", fact(k.rtt_ms != null ? k.rtt_ms + " ms" : null, "measured")],
+          ["Segment size (MSS)", fact(k.mss, "measured")],
+          ["Retransmits", fact(k.retransmits, "measured")],
+          ["Source", fact(k.source, "measured")]
+        ];
+      },
+      testYourself: function () {
+        return "nc -vz " + host() + " 443       # is the port open at all?\n" +
+               "ss -ti  # Linux: live RTT, MSS and retransmits per connection";
+      },
+      whatBreaks: [
+        "Connection refused — something answered and said no. The host is reachable; the service is not listening.",
+        "Connection times out — a firewall is dropping silently. Refused and timed-out are very different diagnoses.",
+        "Retransmits climbing means packet loss; throughput collapses long before the connection drops.",
+        "Ephemeral port exhaustion on a busy client: new connections fail while existing ones are fine."
+      ]
     },
     {
+      key: "tls",
       phase: "Locking the pipe",
       title: "TLS Handshake",
       httpsOnly: true,
       simple: "Before any real data is sent, the browser and server agree on encryption keys so nobody in between can read or tamper with the traffic.",
-      technical: "ClientHello (supported cipher suites + <strong>SNI</strong> hostname, so a server hosting many sites on one IP knows which certificate to present) &rarr; ServerHello + certificate chain &rarr; browser validates the chain against trusted CAs (checking the signature, expiry, hostname match, and revocation status) &rarr; key exchange (typically ECDHE over curve x25519) derives a shared session key that never travels over the wire itself &rarr; Finished messages confirm both sides derived the same key. TLS 1.3 does this in one round trip; TLS 1.2 needs two. After this, every byte &mdash; including the HTTP headers and cookies in the next step &mdash; is symmetrically encrypted with that session key.",
-      code: "ClientHello:\n  SNI = example.com\n  supported_versions = [TLS 1.3, TLS 1.2]\n\nServerHello:\n  version = TLS 1.3\n  cipher_suite = TLS_AES_128_GCM_SHA256\n  key_share = x25519\n\nCertificate:\n  Subject: CN=example.com\n  Issuer:  R3 (Let's Encrypt)\n  Valid:   until 2026-11-02\n\n[Finished — session key derived, connection now encrypted]",
+      technical: "ClientHello (supported cipher suites + <strong>SNI</strong> hostname, so a server hosting many sites on one IP knows which certificate to present, plus the <strong>ALPN</strong> list saying which HTTP version the client speaks) → ServerHello + certificate chain → the browser validates the chain against trusted CAs, checking signature, expiry, hostname match and revocation → key exchange (typically ECDHE over x25519) derives a shared session key that never travels over the wire → Finished messages confirm both sides derived the same key. TLS 1.3 does this in one round trip; TLS 1.2 needs two. The chain matters: your browser trusts the leaf because an intermediate signed it, and it trusts that intermediate because a <strong>root already in your operating system's trust store</strong> signed it. The domain's CAA record is the zone owner's statement about which CAs were allowed to issue in the first place.",
       layers: [ {n:6,w:"primary"}, {n:5,w:"secondary"} ],
-      pos: 34
+      pos: 38,
+      bind: function () {
+        var s = traceSection("tls");
+        if (!s) return [];
+        var rows = [
+          ["Protocol", fact(s.version, "measured")],
+          ["Cipher", fact(s.cipher, "measured")],
+          ["ALPN", fact(s.alpn, "measured")],
+          ["Handshake", fact(s.handshake_ms + " ms", "measured")],
+          ["Trusted via", fact(s.trust_root, "measured")],
+          ["CAA", fact(s.caa_match === true ? "issuer authorised" :
+                       s.caa_match === false ? "issuer NOT listed" : "no comparable record",
+                       "measured")]
+        ];
+        (s.chain || []).forEach(function (c, i) {
+          rows.push(["Cert " + i, fact(c.subject_cn + " ← " + c.issuer_cn +
+                                       " (" + c.days_left + " days left)", "measured")]);
+        });
+        return rows;
+      },
+      testYourself: function () {
+        return "openssl s_client -connect " + host() + ":443 -servername " + host() + " -showcerts\n" +
+               "curl -sS --tlsv1.3 -o /dev/null -w '%{ssl_verify_result}\\n' https://" + host() + "/";
+      },
+      whatBreaks: [
+        "Expired certificate — the single most common outage with a fixed, known date.",
+        "Missing intermediate: works in your browser (which caches intermediates) and fails in curl and on mobile.",
+        "Hostname mismatch — the certificate is valid but not for the name you asked for.",
+        "Clock skew on the client makes a perfectly good certificate look not-yet-valid."
+      ]
     },
     {
+      key: "request",
       phase: "Asking for the page",
       title: "HTTP Request Sent",
       simple: "Your browser sends a structured request: which page it wants, plus context like your browser type and any login cookies.",
-      technical: "Sent over the now-established (and, if HTTPS, encrypted) TCP stream. With HTTP/2 or HTTP/3 this can be multiplexed with other requests over the same connection instead of opening a new one per resource.",
-      code: "GET /dashboard HTTP/2\nHost: example.com\nCookie: session=abc123\nAccept: text/html\nUser-Agent: Mozilla/5.0 ...",
+      technical: "Sent over the now-established (and, if HTTPS, encrypted) TCP stream. HTTP/1.1 sends plain text and can only work on one request at a time per connection. HTTP/2 frames everything in binary and multiplexes many requests over one connection, so a page's stylesheet, script, and images share the connection you already paid the handshake for. HTTP/3 does the same over QUIC and UDP, which removes TCP's head-of-line blocking. Which one you get was decided back in the TLS handshake by ALPN.",
       layers: [ {n:7,w:"primary"} ],
-      pos: 45
+      pos: 45,
+      bind: function () {
+        var s = traceSection("http");
+        if (!s) return [];
+        return [["Negotiated protocol", fact((s.final || {}).protocol, "measured")],
+                ["Requested URL", fact((s.final || {}).url, "measured")]];
+      },
+      testYourself: function () {
+        return "curl -sSv --http2 https://" + host() + "/ -o /dev/null 2>&1 | grep -i 'ALPN\\|HTTP/'";
+      },
+      whatBreaks: [
+        "A request header too large for the server's limit returns 431 or a bare connection reset.",
+        "A missing or wrong Host header on a shared IP reaches the wrong site entirely.",
+        "Cookies not sent because of SameSite or a domain mismatch — you look logged out for no visible reason."
+      ]
     },
     {
+      key: "redirects",
+      phase: "Being sent elsewhere",
+      title: "Redirects",
+      simple: "The server may answer 'not here, go there instead' — and your browser starts over at the new address.",
+      technical: "Each redirect costs a full round trip, and often a fresh DNS lookup, TCP handshake, and TLS handshake if the new location is on a different host. The common chains are worth recognising: <code>http://</code> → <code>https://</code> (an upgrade, but the first hop already travelled in the clear — which is exactly what HSTS preloading exists to prevent), apex → <code>www</code> or the reverse, and locale or region redirects. <strong>301</strong> is permanent and gets cached by browsers, sometimes stubbornly; <strong>302</strong> and <strong>307</strong> are temporary; <strong>308</strong> is a permanent redirect that preserves the method and body. A chain of three redirects before the real page is three round trips of latency every visitor pays.",
+      layers: [ {n:7,w:"primary"} ],
+      pos: 50,
+      bind: function () {
+        var s = traceSection("http");
+        if (!s) return [];
+        var rows = (s.hops || []).map(function (h, i) {
+          return ["Hop " + (i + 1) + " · " + h.status,
+                  fact(h.url + " → " + h.location, "measured")];
+        });
+        if (s.redirect_limit_reached && (s.hops || []).length) {
+          // A hop count alone reads as the whole chain — say plainly it was cut short.
+          rows.push(["Chain truncated", fact("redirect limit reached after " +
+            s.hops.length + " hop(s) — this is not the full chain", "measured")]);
+        } else if (!rows.length) {
+          rows.push(["Redirects", fact("none — served directly", "measured")]);
+        }
+        return rows;
+      },
+      testYourself: function () {
+        return "curl -sSIL http://" + host() + "/ | grep -i '^HTTP/\\|^location:'";
+      },
+      whatBreaks: [
+        "A redirect loop: A points to B and B points back to A. The browser gives up after ~20 hops.",
+        "A cached 301 to a wrong destination is close to unfixable for users who already have it.",
+        "Redirecting to http:// from https:// downgrades the connection and usually breaks mixed-content rules."
+      ]
+    },
+    {
+      key: "edge",
       phase: "Arriving at the edge",
       title: "Request Reaches Your Infrastructure",
-      simple: "The request lands on infrastructure your team controls &mdash; often a CDN or load balancer &mdash; before it ever reaches application code.",
-      technical: "A CDN edge node may serve a cached response immediately (cache HIT &mdash; the journey effectively ends here). Otherwise: an <strong>L4 load balancer</strong> routes purely by IP:port with no visibility into request content, or an <strong>L7 load balancer / ingress controller</strong> reads the Host header and URL path to pick the right backend service &mdash; e.g. /api/* to one service, everything else to another. A WAF or rate limiter may inspect and reject the request before your app ever sees it. Once past the load balancer, the request typically moves into a private subnet: this is where the CIDR block a platform team provisions actually gets used.",
-      code: "Public entry point:\n  93.184.216.34:443  →  Application Load Balancer\n\nRouting rule (L7, by path):\n  Host: example.com, Path: /api/*   → target group: api-service\n  Host: example.com, Path: /*       → target group: web-frontend\n\nBackend targets (private subnet):\n  10.0.2.0/24  →  web-frontend-1 (10.0.2.14)\n                  web-frontend-2 (10.0.2.19)\n                  web-frontend-3 (10.0.2.27)",
+      simple: "The request lands on infrastructure your team controls — often a CDN or load balancer — before it ever reaches application code.",
+      technical: "A CDN edge node may serve a cached response immediately (cache HIT — the journey effectively ends here). Otherwise: an <strong>L4 load balancer</strong> routes purely by IP:port with no visibility into request content, or an <strong>L7 load balancer / ingress controller</strong> reads the Host header and URL path to pick the right backend service — e.g. /api/* to one service, everything else to another. A WAF or rate limiter may inspect and reject the request before your app ever sees it. Once past the load balancer, the request typically moves into a private subnet: this is where the CIDR block a platform team provisions actually gets used.",
       layers: [ {n:7,w:"primary"}, {n:4,w:"primary"}, {n:3,w:"secondary"} ],
-      pos: 58
+      pos: 58,
+      bind: function () {
+        var s = traceSection("http");
+        if (!s) return [];
+        var cache = s.cache || {};
+        return [
+          ["CDN", fact(s.cdn, "measured")],
+          ["Cache state", fact(cache.state, "measured")],
+          ["Age", fact(cache.age != null ? cache.age + "s" : null, "measured")],
+          ["Cache header", fact(cache.header, "measured")]
+        ];
+      },
+      testYourself: function () {
+        return "curl -sSI https://" + host() + "/ | grep -i 'server\\|cf-\\|x-cache\\|age\\|via'";
+      },
+      whatBreaks: [
+        "502 Bad Gateway — the load balancer reached your app and got nonsense back. The LB is fine; the app is not.",
+        "503 — no healthy backends in the target group. Check the health-check path before the app logs.",
+        "A cache key that ignores a header serves one user's content to another. Rare, severe, and always a Vary mistake.",
+        "A WAF rule rejects legitimate traffic and never reaches your logs at all."
+      ]
     },
     {
+      key: "server",
       phase: "Doing the work",
       title: "Server-Side Processing",
       simple: "Your application code runs: checking who you are, fetching data, applying business logic, and preparing a response.",
-      technical: "Middleware runs (auth, logging, rate limiting) &rarr; router matches the path to a handler &rarr; handler queries a database or cache (Redis/Memcached) &rarr; business logic executes &rarr; response body is assembled (server-rendered HTML, or a JSON payload for a client-rendered app). This step is pure application logic &mdash; it's what happens after Layer 7 delivers the request, not a layer itself.",
+      technical: "Middleware runs (auth, logging, rate limiting) → router matches the path to a handler → handler queries a database or cache (Redis/Memcached) → business logic executes → response body is assembled (server-rendered HTML, or a JSON payload for a client-rendered app). This step is pure application logic — it's what happens after Layer 7 delivers the request, not a layer itself.",
       layers: [],
-      pos: 68
+      pos: 68,
+      bind: function () {
+        var s = traceSection("http");
+        if (!s) return [];
+        var ttfb = (s.final || {}).ttfb_ms;
+        return [["Time to first byte", fact(ttfb != null ? ttfb + " ms" : null, "measured")],
+                ["Note", fact("TTFB includes network time — it is an upper bound on server time, not a measurement of it", "illustrative")]];
+      },
+      testYourself: function () {
+        return "curl -sS -o /dev/null -w 'connect %{time_connect}s  ttfb %{time_starttransfer}s  total %{time_total}s\\n' https://" + host() + "/";
+      },
+      whatBreaks: [
+        "500 — your code threw. The stack trace is in your logs, not in the response.",
+        "A slow database query dominates TTFB while every network layer below is healthy.",
+        "Connection-pool exhaustion: fast under light load, cliff-edge failure under real load."
+      ]
     },
     {
+      key: "response",
       phase: "Sending the answer",
       title: "HTTP Response Sent Back",
       simple: "The server sends back a status code (did it work?), some headers (metadata), and the actual content.",
-      technical: "Travels back over the same TCP/TLS connection that's still open, avoiding a fresh handshake. The status code is the first thing worth reading &mdash; it tells you which of five broad outcomes happened before you even look at the body.",
-      code: "HTTP/2 200 OK\nContent-Type: text/html\nCache-Control: max-age=300\nSet-Cookie: session=abc123; Secure; HttpOnly\n\n<html>...</html>\n\n— common status codes —\n200 OK              request succeeded\n301 Moved Perm.      redirect, update bookmarks/links\n304 Not Modified     use your cached copy, body omitted\n404 Not Found        no resource at this path\n500 Internal Error   your app crashed handling it\n502 Bad Gateway       load balancer got a bad reply from the app\n503 Unavailable      app is overloaded or down for maintenance",
+      technical: "Travels back over the same TCP/TLS connection that's still open, avoiding a fresh handshake. The status code is the first thing worth reading — it tells you which of five broad outcomes happened before you even look at the body. Three header families decide what happens next: <strong>caching</strong> (Cache-Control, ETag, Age, Vary) determines whether the next visit needs the network at all; <strong>compression</strong> (Content-Encoding) is why a 61 KB page arrives as 14 KB; and the <strong>security headers</strong> (HSTS, CSP, X-Content-Type-Options, cookie flags) decide what the browser will allow the page to do. That last group is worth grading, because everything in it is opt-in and silently absent by default.",
       layers: [ {n:7,w:"primary"} ],
-      pos: 78
+      pos: 76,
+      bind: function () {
+        var s = traceSection("http");
+        if (!s) return [];
+        var f = s.final || {}, sec = s.security || {};
+        return [
+          ["Status", fact(f.protocol + " " + f.status, "measured")],
+          ["Content type", fact(f.content_type, "measured")],
+          ["On the wire", fact(f.wire_bytes != null ? f.wire_bytes + " bytes" : null, "measured")],
+          ["Decoded", fact(f.decoded_bytes != null ? f.decoded_bytes + " bytes" : null, "measured")],
+          ["Compression", fact(f.encoding ? f.encoding + " " + f.ratio + ":1" : "none", "measured")],
+          ["Security grade", fact(sec.grade, "measured")],
+          ["Missing headers", fact((sec.missing || []).join(", ") || "none", "measured")],
+          ["Cookies", fact((sec.cookies || []).map(function (c) {
+            return c.name + (c.secure ? " +Secure" : " -Secure") +
+                   (c.httponly ? " +HttpOnly" : "") +
+                   (c.samesite ? " SameSite=" + c.samesite : " -SameSite");
+          }).join("; ") || "none", "measured")]
+        ];
+      },
+      testYourself: function () {
+        return "curl -sSI https://" + host() + "/\n" +
+               "curl -sS -H 'Accept-Encoding: gzip' -o /dev/null -w '%{size_download} bytes\\n' https://" + host() + "/";
+      },
+      whatBreaks: [
+        "404 for an asset that exists — almost always a path or base-URL mistake, not a server fault.",
+        "304 Not Modified when you expected fresh content: your ETag or Last-Modified logic is answering for you.",
+        "Missing HSTS means the first plaintext hop stays exploitable forever.",
+        "A cookie without Secure travels in the clear on any accidental http:// request."
+      ]
     },
     {
+      key: "render",
       phase: "Turning bytes into pixels",
       title: "Browser Parses & Renders",
       simple: "Your browser reads the HTML and progressively builds the page you see, fetching extra files like images and stylesheets along the way.",
-      technical: "HTML is parsed incrementally into the DOM. CSS is parsed into the CSSOM (render-blocking by default). Synchronous &lt;script&gt; tags block HTML parsing unless marked async/defer. DOM + CSSOM merge into a Render Tree → Layout computes exact geometry → Paint fills in pixels → Compositing assembles layers, often GPU-accelerated, into the final frame. Referenced images, fonts, and scripts trigger their own requests &mdash; over HTTP/2 or HTTP/3 these are typically multiplexed over the connection that's already open, reusing the same TCP/TLS session instead of repeating steps 3 and 4 for every single file.",
-      code: "Parsing index.html finds:\n  <link rel=\"stylesheet\" href=\"/style.css\">\n  <script src=\"/app.js\" defer><\/script>\n  <img src=\"/logo.png\">\n\n3 more requests fire — same connection, no new handshake:\n  GET /style.css   → 200, 4.1 KB\n  GET /app.js       → 200, 61 KB\n  GET /logo.png     → 200, 12 KB (or 304 if cached)",
+      technical: "HTML is parsed incrementally into the DOM. CSS is parsed into the CSSOM (render-blocking by default). Synchronous script tags block HTML parsing unless marked async/defer. DOM + CSSOM merge into a Render Tree → Layout computes exact geometry → Paint fills in pixels → Compositing assembles layers, often GPU-accelerated, into the final frame. Referenced images, fonts, and scripts trigger their own requests — over HTTP/2 or HTTP/3 these are typically multiplexed over the connection that's already open, reusing the same TCP/TLS session instead of repeating the handshake steps for every single file.",
       layers: [],
-      pos: 90
+      pos: 86,
+      bind: function () { return []; },
+      testYourself: function () {
+        return "# DevTools → Performance: record a reload and read the flame chart\n" +
+               "# DevTools → Network: sort by 'Connection ID' to see reuse";
+      },
+      whatBreaks: [
+        "A render-blocking stylesheet in the head delays first paint for every visitor.",
+        "A synchronous third-party script stalls parsing until that third party responds.",
+        "A missing font falls back mid-load and the whole layout shifts."
+      ]
     },
     {
+      key: "interactive",
       phase: "Ready for you",
       title: "Page Becomes Interactive",
       simple: "JavaScript finishes running and the page starts responding to your clicks and scrolls.",
       technical: "Deferred and async scripts finish executing, event listeners attach, and the browser fires events like DOMContentLoaded and load. Frameworks may then hydrate server-rendered markup into a fully interactive client-side app. This is what Core Web Vitals like Time to Interactive (TTI) and Largest Contentful Paint (LCP) are measuring.",
       layers: [],
-      pos: 98
+      pos: 94,
+      bind: function () { return []; },
+      testYourself: function () {
+        return "# DevTools → Lighthouse: LCP, TTI, CLS for this page";
+      },
+      whatBreaks: [
+        "The page looks finished but does not respond — hydration has not completed.",
+        "A JavaScript exception during startup leaves half the listeners unattached and no visible error."
+      ]
+    },
+    {
+      key: "teardown",
+      phase: "Afterwards",
+      title: "Teardown & what's cached now",
+      simple: "The connection closes, but your machine keeps enough of what it learned that the next visit is much faster.",
+      technical: "Three caches were populated on the way through, and each one removes a step from the next visit. The <strong>DNS answer</strong> is held for its TTL, so the whole resolution step is skipped. The <strong>TLS session ticket</strong> lets the next handshake resume in a single round trip instead of a full negotiation. The <strong>HTTP cache</strong> may let the browser skip the request entirely, or send a conditional request with If-None-Match and get a 304 with no body at all. Meanwhile the connection itself is usually kept alive briefly rather than closed, so an immediate second request reuses it outright. This is why the second load of a site feels instant and why a cold measurement is the only honest one.",
+      code: "First visit:\n  DNS 41 ms + TCP 12 ms + TLS 38 ms + request 88 ms  =  179 ms\n\nSecond visit, within the DNS TTL:\n  DNS   0 ms  (cached for the remaining TTL)\n  TCP  12 ms\n  TLS   9 ms  (resumed from a session ticket)\n  GET  ->  304 Not Modified, no body\n           =  ~21 ms",
+      layers: [ {n:5,w:"primary"}, {n:7,w:"secondary"} ],
+      pos: 98,
+      bind: function () {
+        var dns = traceSection("dns");
+        var tls = traceSection("tls");
+        var http = traceSection("http");
+        var rows = [];
+        if (dns) {
+          var aRec = (dns.records.A || [])[0];
+          rows.push(["DNS cached for", fact(aRec ? aRec.ttl + "s" : null, "measured")]);
+        }
+        if (tls) rows.push(["Session resumption", fact((tls.resumption || {}).tested ?
+          ((tls.resumption.resumed ? "resumed in " + tls.resumption.handshake_ms + " ms" : "not offered")) :
+          "not tested (run with --deep)", "measured")]);
+        if (http) rows.push(["Cache directives", fact((http.cache || {}).directives || "none", "measured")]);
+        return rows;
+      },
+      testYourself: function () {
+        return "curl -sSI https://" + host() + "/ | grep -i 'cache-control\\|etag\\|age\\|expires'\n" +
+               "# then repeat with:  -H 'If-None-Match: <the etag>'   and expect 304";
+      },
+      whatBreaks: [
+        "Cache-Control: no-store on everything — every visit pays the full cost, forever.",
+        "An immutable asset cached for a year without a content hash in its name can never be updated.",
+        "Session tickets disabled means every connection pays a full handshake."
+      ]
     }
   ];
+
+  var SECTION_FOR_STEP = {
+    local: "local", dns: "dns", address: "tcp", path: "path", tcp: "tcp",
+    tls: "tls", request: "http", redirects: "http", edge: "http",
+    server: "http", response: "http", teardown: "http"
+  };
+
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".copy-btn");
+    if (!btn) return;
+    var text = btn.dataset.copy;
+
+    function showCopied() {
+      var original = "Copy";
+      btn.textContent = "Copied";
+      setTimeout(function () { btn.textContent = original; }, 1200);
+    }
+
+    function fallbackCopy() {
+      // navigator.clipboard is unavailable on file:// in some browsers (and in
+      // any insecure context) — fall back to a hidden textarea + execCommand
+      // instead of leaving the click silently do nothing.
+      try {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.top = "-1000px";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        var ok = false;
+        try { ok = document.execCommand("copy"); } catch (execErr) { ok = false; }
+        document.body.removeChild(ta);
+        if (ok) {
+          showCopied();
+        } else {
+          btn.textContent = "Copy unavailable";
+          setTimeout(function () { btn.textContent = "Copy"; }, 1200);
+        }
+      } catch (err) {
+        btn.textContent = "Copy unavailable";
+        setTimeout(function () { btn.textContent = "Copy"; }, 1200);
+      }
+    }
+
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      navigator.clipboard.writeText(text).then(showCopied, fallbackCopy);
+    } else {
+      fallbackCopy();
+    }
+  });
 
   var LAYER_COLOR_VARS = {1:"--l1",2:"--l2",3:"--l3",4:"--l4",5:"--l5",6:"--l6",7:"--l7"};
 
@@ -1240,6 +1698,18 @@
       }
     }
 
+    var rows = typeof step.bind === "function" ? step.bind() : [];
+    if (rows.length) {
+      html += '<p class="label">Measured for this request</p><div class="fact-grid">' +
+        rows.map(function (r) {
+          return '<div><div class="k">' + escapeHtml(r[0]) + '</div>' +
+                 '<div class="v">' + renderFact(r[1]) + "</div></div>";
+        }).join("") + "</div>";
+    } else if (state.trace && step.key && traceWhyNot(SECTION_FOR_STEP[step.key])) {
+      html += '<p class="label">Measured for this request</p><p style="color:var(--text-muted)">' +
+        "not observed — " + escapeHtml(traceWhyNot(SECTION_FOR_STEP[step.key])) + "</p>";
+    }
+
     var codeContent = step.code;
     if (step.title === "DNS Resolution") codeContent = buildDnsCode(step.code);
     if (step.title === "TCP Connection") codeContent = buildTcpCode(step.code);
@@ -1247,6 +1717,17 @@
     if (levelState === "technical" && codeContent) {
       html += '<p class="label">On the wire</p><code class="block">' +
               escapeHtml(codeContent) + "</code>";
+    }
+    if (typeof step.testYourself === "function") {
+      html += '<p class="label">Test this yourself</p><div class="copy-row">' +
+        '<code class="block">' + escapeHtml(step.testYourself()) + "</code>" +
+        '<button class="copy-btn" type="button" data-copy="' +
+        escapeHtml(step.testYourself()) + '">Copy</button></div>';
+    }
+    if (step.whatBreaks && step.whatBreaks.length) {
+      html += '<p class="label">What breaks here</p><ul class="breaks">' +
+        step.whatBreaks.map(function (b) { return "<li>" + escapeHtml(b) + "</li>"; }).join("") +
+        "</ul>";
     }
     if (step.httpsOnly) {
       html += '<p class="https-note' + (httpsOn ? "" : " show") + '">Without HTTPS, this step is skipped entirely — meaning the DNS lookup already happened in the clear, and everything from here on (headers, cookies, page content) travels as plain text that any network hop in between can read or modify.</p>';
