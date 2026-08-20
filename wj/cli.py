@@ -15,11 +15,64 @@ from wj import __version__, capabilities, redact, render, run, schema
 from wj.context import Context, parse_target
 
 
+EPILOG = """\
+What it measures:
+  It opens real sockets and shells out to real tools to measure what a
+  browser will never show you: the gateway MAC your frames are addressed
+  to, the negotiated TLS cipher, the certificate chain up to the root in
+  your trust store, the traceroute hops and their AS numbers, the redirect
+  chain, and the compression ratio. It can emit the result as a versioned
+  JSON trace document.
+
+Examples:
+  %(prog)s example.com
+      Trace https://example.com and print a report to the terminal.
+
+  %(prog)s example.com --json trace.json
+      Export the trace document (redacted by default -- see below), then
+      open webpage-journey.html and drop trace.json onto it: every stage
+      of the page swaps its teaching example for your real measurement.
+      This round trip is the point of the project.
+
+  %(prog)s example.com --no-tls
+      Trace plain HTTP instead of HTTPS.
+
+  %(prog)s --osi
+      Print the OSI reference table alone and exit -- no trace, no
+      network activity.
+
+  %(prog)s example.com --json - | jq .tls
+      Write the trace document to stdout instead of a file. All narration
+      goes to stderr in this mode, so stdout stays clean for a pipe.
+
+Exit codes:
+  0  trace completed (findings, e.g. an untrusted cert, do not change this)
+  1  target unresolvable (neither DNS nor TCP observed anything)
+  2  usage error (bad arguments, or no target given)
+
+Redaction:
+  Exports (--json) are redacted by default: MAC addresses, your local IP,
+  your public IP, and private traceroute hops are replaced with a marker.
+  Use --no-redact to keep that detail.
+
+Protocol support:
+  %(prog)s speaks only HTTP/1.1. It offers just that one protocol over
+  ALPN during the TLS handshake, because it has no HTTP/2 framing to fall
+  back on -- offering h2 without being able to speak it would mean lying
+  about what happened on the wire. What a host supports is a separate,
+  honestly-labelled measurement, reported as a finding (e.g. "this host
+  advertises h2, h3, but this tool only offers HTTP/1.1").
+
+Trace only hosts you are authorised to probe.
+"""
+
+
 def build_parser():
     p = argparse.ArgumentParser(
-        prog="trace.py",
-        description="Trace a webpage request end to end, with real data, mapped onto the OSI model.",
-        epilog="Trace only hosts you are authorised to probe.",
+        description="Trace a webpage request end to end, with real data, mapped\n"
+                     "onto the OSI model.",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("target", nargs="?", help="Domain or URL, e.g. example.com")
     p.add_argument("--port", type=int, default=None, help="Override the port")
@@ -41,12 +94,13 @@ def build_parser():
                          const="offline", help="Never install anything")
     p.add_argument("--osi", action="store_true",
                    help="Print the OSI reference table alone and exit (no trace)")
-    p.add_argument("--version", action="version", version=f"trace.py {__version__}")
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return p
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
 
     # When the document goes to stdout, all narration goes to stderr so it stays pipeable.
     to_stdout = args.json_path == "-"
@@ -57,7 +111,7 @@ def main(argv=None):
         return run.EXIT_OK
 
     if not args.target:
-        console.print("[red]No target given.[/red] Try: trace.py example.com")
+        console.print(f"[red]No target given.[/red] Try: {parser.prog} example.com")
         return run.EXIT_USAGE
 
     try:
