@@ -7,7 +7,7 @@ def make_trace():
     return schema.new_trace(
         target={"input": "example.com", "host": "example.com",
                 "scheme": "https", "port": 443, "path": "/"},
-        tool_version="2.0.0",
+        tool_version="2.1.0",
         generated_at="2026-08-20T09:31:02Z",
         capabilities={"privileged": False, "tools": [], "libs": {}},
         redacted=True,
@@ -17,7 +17,7 @@ def make_trace():
 def test_new_trace_carries_version_and_target():
     t = make_trace()
     assert t["schema"] == "webpage-journey-trace/1"
-    assert t["tool"] == {"name": "trace.py", "version": "2.0.0"}
+    assert t["tool"] == {"name": "trace.py", "version": "2.1.0"}
     assert t["target"]["host"] == "example.com"
     assert t["redacted"] is True
 

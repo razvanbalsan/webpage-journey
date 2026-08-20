@@ -21,7 +21,7 @@ def sample_trace():
     trace = schema.new_trace(
         target={"input": "https://example.com/", "host": "example.com",
                 "scheme": "https", "port": 443, "path": "/"},
-        tool_version="2.0.0", generated_at="2026-08-20T09:00:00+00:00",
+        tool_version="2.1.0", generated_at="2026-08-20T09:00:00+00:00",
         capabilities={"privileged": False, "can_sudo": False, "tools": ["traceroute"],
                       "libs": {"dns": True, "cryptography": True, "h2": False},
                       "installed_during_run": []},

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "webpage-journey"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Trace a webpage request end to end and map it onto the OSI model."
 requires-python = ">=3.13"
 dependencies = [
@@ -15,6 +15,9 @@ dependencies = [
 
 [project.scripts]
 webpage-journey = "wj.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "wj.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["wj", "wj.collect"]

@@ -5,7 +5,7 @@ def full_trace():
     trace = schema.new_trace(
         target={"input": "example.com", "host": "example.com",
                 "scheme": "https", "port": 443, "path": "/dashboard"},
-        tool_version="2.0.0", generated_at="2026-08-20T00:00:00Z",
+        tool_version="2.1.0", generated_at="2026-08-20T00:00:00Z",
         capabilities={}, redacted=False)
     trace["local"] = {"observed": True, "interface": "en0", "link": "active",
                       "mtu": 1500, "local_ip": "192.168.1.23",
@@ -97,7 +97,7 @@ def test_unobserved_sections_propagate_their_reason():
 def test_empty_trace_yields_seven_unobserved_layers():
     trace = schema.new_trace(
         target={"input": "x", "host": "x", "scheme": "https", "port": 443, "path": "/"},
-        tool_version="2.0.0", generated_at="t", capabilities={}, redacted=False)
+        tool_version="2.1.0", generated_at="t", capabilities={}, redacted=False)
     osi = schema.build_osi(trace)
     assert all(layer["observed"] is False for layer in osi.values())
 

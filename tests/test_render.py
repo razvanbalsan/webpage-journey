@@ -83,7 +83,7 @@ def test_render_ladder_prints_this_hosts_commands():
 def test_render_trace_survives_a_fully_unobserved_document():
     trace = schema.new_trace(
         target={"input": "x", "host": "x.test", "scheme": "https", "port": 443, "path": "/"},
-        tool_version="2.0.0", generated_at="t", capabilities={}, redacted=False)
+        tool_version="2.1.0", generated_at="t", capabilities={}, redacted=False)
     trace["timings"] = {"waterfall": [], "total_ms": 0.0}
     trace["osi"] = schema.build_osi(trace)
     out = capture(render.render_trace, trace)

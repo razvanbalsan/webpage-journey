@@ -3,18 +3,22 @@
 ## Publishing a version so `webpage-journey.rb` can install it
 
 The formula's `url` points at a GitHub release archive that does not exist yet
-(`https://github.com/razvanbalsan/webpage-journey/archive/refs/tags/v0.1.0.tar.gz`),
+(`https://github.com/razvanbalsan/webpage-journey/archive/refs/tags/v2.1.0.tar.gz`),
 and its `sha256` is a placeholder. Both need the real values before anyone can
 `brew install --formula ./webpage-journey.rb` from a clean checkout.
 
-1. Make sure `pyproject.toml`'s `version` and the tag you are about to push agree
-   (currently `0.1.0` / `v0.1.0`). Bump both together for future releases.
+1. `wj/__init__.py`'s `__version__` is the single source of truth for the
+   project's version — `pyproject.toml` reads it dynamically
+   (`[tool.setuptools.dynamic]`), and the CLI/trace documents import it
+   directly. Bump `__version__` and the tag you are about to push together
+   (currently `2.1.0` / `v2.1.0`), and update `webpage-journey.rb`'s `url` to
+   match. Never hand-edit `pyproject.toml`'s version.
 2. Make sure the full suite passes: `.venv/bin/python -m pytest -q`.
 3. Tag and push:
 
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v2.1.0
+   git push origin v2.1.0
    ```
 
 4. GitHub builds the source archive for every tag automatically — no separate
@@ -23,7 +27,7 @@ and its `sha256` is a placeholder. Both need the real values before anyone can
 5. Compute the real digest of that exact archive:
 
    ```bash
-   curl -sL https://github.com/razvanbalsan/webpage-journey/archive/refs/tags/v0.1.0.tar.gz \
+   curl -sL https://github.com/razvanbalsan/webpage-journey/archive/refs/tags/v2.1.0.tar.gz \
      | shasum -a 256
    ```
 

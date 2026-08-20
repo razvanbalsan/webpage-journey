@@ -5,7 +5,7 @@ def base_trace():
     trace = schema.new_trace(
         target={"input": "example.com", "host": "example.com",
                 "scheme": "https", "port": 443, "path": "/"},
-        tool_version="2.0.0", generated_at="2026-08-20T00:00:00Z",
+        tool_version="2.1.0", generated_at="2026-08-20T00:00:00Z",
         capabilities={}, redacted=False)
     return trace
 
