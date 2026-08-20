@@ -125,6 +125,8 @@ def render_dns(console, trace):
         timing_parts.append(f"{timing['cold']} ms cold")
     if timing.get("warm") is not None:
         timing_parts.append(f"{timing['warm']} ms warm")
+    if timing.get("survey_ms") is not None:
+        timing_parts.append(f"{timing['survey_ms']} ms for the full 9-record-type survey")
     timing_text = f"  [dim]({', '.join(timing_parts)})[/dim]" if timing_parts else ""
     tree = Tree(f"[bold]{trace['target']['host']}[/bold]{timing_text}")
     for rtype, records in (section.get("records") or {}).items():

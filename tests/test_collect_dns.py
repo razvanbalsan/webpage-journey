@@ -165,6 +165,30 @@ def test_render_rdata_txt_without_strings_falls_back_to_str():
     assert dns_collect.render_rdata(FakeTxtRdataNoStrings(), "TXT") == '"already fine"'
 
 
+def test_dns_timing_splits_the_address_lookup_from_the_full_survey():
+    # C4: timing_ms.cold used to span the WHOLE nine-record-type survey (A
+    # through HTTPS), not the A/AAAA lookup this specific request actually
+    # pays for before it can open a TCP connection -- inflating the waterfall's
+    # DNS bar and the per-host "lookup time" figure by however long the other
+    # seven, off-critical-path queries took.
+    import time
+
+    def query(name, rtype):
+        time.sleep(0.005 if rtype in ("A", "AAAA") else 0.03)
+        if rtype == "A":
+            return [{"data": "93.184.216.34", "ttl": 300}], True
+        return [], False
+
+    section = dns_collect.collect(make_ctx(), query=query,
+                                  delegation=lambda host: [], resolvers=lambda: ([], "none"))
+    timing = section["timing_ms"]
+    assert "survey_ms" in timing
+    # Two ~5ms queries (A, AAAA) vs. seven further ~30ms queries: cold must
+    # reflect only the first two, comfortably under half of the full survey.
+    assert timing["cold"] < timing["survey_ms"]
+    assert timing["cold"] < timing["survey_ms"] / 2
+
+
 def test_dnssec_verdict_comes_from_the_address_records_only():
     def query(name, rtype):
         if rtype == "A":

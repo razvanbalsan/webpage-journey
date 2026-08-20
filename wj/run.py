@@ -51,6 +51,10 @@ def build_timings(trace):
     http = trace.get("http", {})
     final = http.get("final") or {}
 
+    # dns.timing_ms.cold is the A/AAAA address lookup this request actually pays
+    # for -- NOT the full nine-record-type survey wj/collect/dns.py also runs
+    # for this trace document (that is timing_ms.survey_ms, kept separately so
+    # it never gets billed to the waterfall or misread as connection latency).
     dns_ms = (dns.get("timing_ms") or {}).get("cold", 0.0) if dns.get("observed") else 0.0
     chosen_ip = (tcp.get("chosen") or {}).get("ip")
     tcp_ms = 0.0

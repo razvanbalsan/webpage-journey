@@ -188,10 +188,22 @@ def collect(ctx, query=None, delegation=None, resolvers=None):
     records = {}
     failed = []
     dnssec_flag = None
-    cold_start = time.perf_counter()
+    address_ms = None
+    survey_start = time.perf_counter()
     try:
         for rtype in RECORD_TYPES:
             found, ad = query(ctx.host, rtype)
+            if rtype == "AAAA":
+                # A and AAAA (the first two entries of RECORD_TYPES) are the only
+                # DNS work this specific request pays for before it can open a TCP
+                # connection. The other seven types below are collected for this
+                # trace document but are not on the page-load critical path, and
+                # must not be billed to the waterfall's DNS bar or the per-host
+                # "lookup time" figure -- that used to be the FULL nine-query
+                # survey (up to ~12x the real address-resolution cost). Captured
+                # unconditionally (before the found-is-None branch below) so a
+                # failed AAAA query still gets an honest checkpoint.
+                address_ms = round((time.perf_counter() - survey_start) * 1000, 1)
             if found is None:
                 records[rtype] = []
                 failed.append(rtype)
@@ -201,7 +213,8 @@ def collect(ctx, query=None, delegation=None, resolvers=None):
                 dnssec_flag = ad
     except LookupError as exc:
         return unobserved(str(exc))
-    cold_ms = round((time.perf_counter() - cold_start) * 1000, 1)
+    survey_ms = round((time.perf_counter() - survey_start) * 1000, 1)
+    cold_ms = address_ms if address_ms is not None else survey_ms
 
     if not records.get("A") and not records.get("AAAA"):
         return unobserved(f"{ctx.host} did not resolve to any address")
@@ -227,5 +240,5 @@ def collect(ctx, query=None, delegation=None, resolvers=None):
         delegation=delegation(ctx.host),
         alpn_advertised=https_info["alpn"],
         ech=https_info["ech"],
-        timing_ms={"cold": cold_ms, "warm": warm_ms},
+        timing_ms={"cold": cold_ms, "warm": warm_ms, "survey_ms": survey_ms},
     )
