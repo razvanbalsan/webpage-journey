@@ -76,3 +76,135 @@ def validate(trace):
             problems.append(f"notes[{i}]: unknown severity {note.get('severity')!r}")
 
     return problems
+
+
+def _layer(section, facts, test_command=None):
+    if not section.get("observed"):
+        return {"observed": False, "facts": [],
+                "why_not": section.get("why_not", "not collected"),
+                "test_command": test_command}
+    return {"observed": True, "facts": [f for f in facts if f],
+            "why_not": None, "test_command": test_command}
+
+
+def build_osi(trace):
+    """Map a completed trace onto the seven layers, using only measured values."""
+    local = trace.get("local", {})
+    dns = trace.get("dns", {})
+    tcp = trace.get("tcp", {})
+    tls = trace.get("tls", {})
+    http = trace.get("http", {})
+    path = trace.get("path", {})
+
+    host = trace.get("target", {}).get("host", "")
+    port = trace.get("target", {}).get("port", 443)
+    scheme = trace.get("target", {}).get("scheme", "https")
+    url = f"{scheme}://{host}{trace.get('target', {}).get('path', '/')}"
+    target_ip = (tcp.get("chosen") or {}).get("ip")
+
+    l1_facts = [
+        f"interface {local.get('interface')}" if local.get("interface") else None,
+        f"link {local.get('link')}" if local.get("link") else None,
+        f"MTU {local.get('mtu')}" if local.get("mtu") else None,
+    ]
+
+    l2_facts = [
+        f"your MAC {local.get('local_mac')}" if local.get("local_mac") else None,
+        f"→ gateway MAC {local.get('gateway_mac')} ({local.get('gateway_ip')})"
+        if local.get("gateway_mac") else None,
+        "every frame to this server is addressed to your router, not to the server",
+    ]
+
+    l3_facts = []
+    if local.get("local_ip") and target_ip:
+        l3_facts.append(f"{local['local_ip']} → {target_ip}")
+    if local.get("nat"):
+        l3_facts.append(f"NAT: {local.get('local_ip')} appears as {local.get('public_ip')}")
+    if path.get("observed"):
+        l3_facts.append(f"{len(path.get('hops', []))} hops")
+        as_path = path.get("asn_path") or []
+        if as_path:
+            l3_facts.append(" → ".join(f"AS{n}" for n in as_path))
+
+    kernel = tcp.get("kernel") or {}
+    l4_facts = []
+    if tcp.get("observed"):
+        local_port = (tcp.get("local") or {}).get("port")
+        if local_port is not None:
+            l4_facts.append(f"TCP :{local_port} → :{port}")
+        if kernel.get("rtt_ms") is not None:
+            l4_facts.append(f"RTT {kernel['rtt_ms']} ms")
+        if kernel.get("mss"):
+            l4_facts.append(f"MSS {kernel['mss']}")
+        if kernel.get("retransmits") is not None:
+            l4_facts.append(f"{kernel['retransmits']} retransmits")
+        if tcp.get("winner_family"):
+            l4_facts.append(f"{tcp['winner_family']} won the connection race")
+
+    l5_facts = []
+    if tls.get("observed"):
+        l5_facts.append("TLS session established")
+        if (tls.get("resumption") or {}).get("resumed"):
+            l5_facts.append("resumed from a session ticket")
+    if http.get("observed"):
+        l5_facts.append(f"{len(http.get('hops', [])) + 1} request(s) over this connection")
+
+    final = http.get("final") or {}
+    l6_facts = []
+    if tls.get("observed"):
+        version_cipher = " · ".join(
+            p for p in (tls.get("version"), tls.get("cipher")) if p)
+        if version_cipher:
+            l6_facts.append(version_cipher)
+        if tls.get("alpn"):
+            l6_facts.append(f"ALPN {tls['alpn']}")
+    if final.get("encoding"):
+        l6_facts.append(
+            f"{final['encoding']}: {final.get('wire_bytes')} → {final.get('decoded_bytes')} bytes"
+            + (f" ({final['ratio']}:1)" if final.get("ratio") else ""))
+    if final.get("content_type"):
+        l6_facts.append(final["content_type"])
+
+    l7_facts = []
+    if http.get("observed"):
+        protocol, status = final.get("protocol"), final.get("status")
+        if protocol and status is not None:
+            l7_facts.append(f"{protocol} → {status}")
+        elif status is not None:
+            l7_facts.append(f"status {status}")
+        elif protocol:
+            l7_facts.append(protocol)
+        if http.get("hops"):
+            if http.get("redirect_limit_reached"):
+                l7_facts.append(
+                    f"{len(http['hops'])} redirect(s) followed — chain truncated at the limit")
+            else:
+                l7_facts.append(f"{len(http['hops'])} redirect(s) followed")
+    if dns.get("observed"):
+        if target_ip:
+            l7_facts.append(f"DNS: {host} → {target_ip}")
+        else:
+            l7_facts.append(f"DNS: {host} resolved")
+        resolver = (dns.get("resolver") or {}).get("servers") or []
+        if resolver:
+            fact = f"resolved via {resolver[0]}"
+            if dns.get("dnssec"):
+                fact += f", DNSSEC {dns['dnssec']}"
+            l7_facts.append(fact)
+        failed = dns.get("records_failed") or []
+        if failed:
+            l7_facts.append(f"query failed for: {', '.join(failed)}")
+
+    return {
+        "l1": _layer(local, l1_facts, f"ifconfig {local.get('interface')}"
+                     if local.get("interface") else None),
+        "l2": _layer(local, l2_facts, f"arp -n {local.get('gateway_ip')}"
+                     if local.get("gateway_ip") else None),
+        "l3": _layer(tcp if not path.get("observed") else path, l3_facts,
+                     f"ping {target_ip}" if target_ip else None),
+        "l4": _layer(tcp, l4_facts, f"nc -vz {host} {port}"),
+        "l5": _layer(tls if tls.get("observed") else http, l5_facts, None),
+        "l6": _layer(tls if tls.get("observed") else http, l6_facts,
+                     f"openssl s_client -connect {host}:{port} -servername {host}"),
+        "l7": _layer(http, l7_facts, f"curl -sSI {url}"),
+    }

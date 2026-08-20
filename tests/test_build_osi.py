@@ -1,0 +1,164 @@
+from wj import schema
+
+
+def full_trace():
+    trace = schema.new_trace(
+        target={"input": "example.com", "host": "example.com",
+                "scheme": "https", "port": 443, "path": "/dashboard"},
+        tool_version="2.0.0", generated_at="2026-08-20T00:00:00Z",
+        capabilities={}, redacted=False)
+    trace["local"] = {"observed": True, "interface": "en0", "link": "active",
+                      "mtu": 1500, "local_ip": "192.168.1.23",
+                      "local_mac": "aa:bb:cc:dd:ee:ff", "gateway_ip": "192.168.1.1",
+                      "gateway_mac": "11:22:33:44:55:66", "public_ip": "81.180.20.7",
+                      "nat": True, "dhcp": {}}
+    trace["dns"] = {"observed": True, "dnssec": "secure",
+                    "resolver": {"servers": ["1.1.1.1"], "source": "scutil"},
+                    "records": {"A": [{"data": "93.184.216.34", "ttl": 300}], "AAAA": []},
+                    "alpn_advertised": ["h2"], "timing_ms": {"cold": 41.2, "warm": 1.1}}
+    trace["tcp"] = {"observed": True, "winner_family": "ipv4",
+                    "chosen": {"ip": "93.184.216.34", "family": "ipv4", "port": 443},
+                    "local": {"ip": "192.168.1.23", "port": 54213},
+                    "kernel": {"rtt_ms": 12.4, "mss": 1460, "retransmits": 0,
+                               "source": "TCP_INFO"}}
+    trace["tls"] = {"observed": True, "version": "TLSv1.3", "alpn": "h2",
+                    "cipher": "TLS_AES_128_GCM_SHA256", "handshake_ms": 38.2,
+                    "chain": [{"subject_cn": "example.com", "issuer_cn": "R3"}],
+                    "trust_root": "ISRG Root X1", "resumption": {"tested": False}}
+    trace["http"] = {"observed": True, "hops": [],
+                     "final": {"url": "https://example.com/dashboard", "status": 200,
+                               "protocol": "HTTP/1.1", "encoding": "gzip", "ratio": 4.4,
+                               "wire_bytes": 14000, "decoded_bytes": 61000,
+                               "content_type": "text/html"}}
+    trace["path"] = {"observed": True, "hops": [{"ttl": 1, "ip": "192.168.1.1"}],
+                     "asn_path": [8708, 13335], "path_mtu": None}
+    return trace
+
+
+def test_every_layer_is_present():
+    osi = schema.build_osi(full_trace())
+    assert set(osi) == {"l1", "l2", "l3", "l4", "l5", "l6", "l7"}
+
+
+def test_layer_two_names_the_gateway_mac():
+    osi = schema.build_osi(full_trace())
+    assert osi["l2"]["observed"] is True
+    joined = " ".join(osi["l2"]["facts"])
+    assert "11:22:33:44:55:66" in joined
+    assert "aa:bb:cc:dd:ee:ff" in joined
+
+
+def test_layer_three_reports_nat_and_the_as_path():
+    osi = schema.build_osi(full_trace())
+    joined = " ".join(osi["l3"]["facts"])
+    assert "NAT" in joined
+    assert "AS8708" in joined and "AS13335" in joined
+
+
+def test_layer_four_reports_ports_rtt_and_mss():
+    osi = schema.build_osi(full_trace())
+    joined = " ".join(osi["l4"]["facts"])
+    assert ":54213" in joined and ":443" in joined
+    assert "12.4" in joined
+    assert "1460" in joined
+
+
+def test_layer_six_reports_tls_and_compression():
+    osi = schema.build_osi(full_trace())
+    joined = " ".join(osi["l6"]["facts"])
+    assert "TLSv1.3" in joined
+    assert "gzip" in joined
+
+
+def test_layer_seven_reports_the_request_and_dns():
+    osi = schema.build_osi(full_trace())
+    joined = " ".join(osi["l7"]["facts"])
+    assert "200" in joined
+    assert "93.184.216.34" in joined
+
+
+def test_test_commands_are_filled_with_this_hosts_values():
+    osi = schema.build_osi(full_trace())
+    assert osi["l3"]["test_command"] == "ping 93.184.216.34"
+    assert osi["l4"]["test_command"] == "nc -vz example.com 443"
+    assert "openssl s_client" in osi["l6"]["test_command"]
+    assert "curl -sSI https://example.com/dashboard" == osi["l7"]["test_command"]
+
+
+def test_unobserved_sections_propagate_their_reason():
+    trace = full_trace()
+    trace["local"] = {"observed": False, "why_not": "neither route nor ip is on PATH"}
+    osi = schema.build_osi(trace)
+    assert osi["l1"]["observed"] is False
+    assert osi["l1"]["why_not"] == "neither route nor ip is on PATH"
+    assert osi["l1"]["facts"] == []
+
+
+def test_empty_trace_yields_seven_unobserved_layers():
+    trace = schema.new_trace(
+        target={"input": "x", "host": "x", "scheme": "https", "port": 443, "path": "/"},
+        tool_version="2.0.0", generated_at="t", capabilities={}, redacted=False)
+    osi = schema.build_osi(trace)
+    assert all(layer["observed"] is False for layer in osi.values())
+
+
+def test_layer_seven_flags_a_truncated_redirect_chain():
+    trace = full_trace()
+    trace["http"]["hops"] = [{"status": 301}, {"status": 302}]
+    trace["http"]["redirect_limit_reached"] = True
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l7"]["facts"])
+    assert "2 redirect(s) followed" in joined
+    assert "truncated" in joined
+
+
+def test_layer_seven_names_failed_dns_record_types():
+    trace = full_trace()
+    trace["dns"]["records_failed"] = ["CAA", "MX"]
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l7"]["facts"])
+    assert "query failed for: CAA, MX" in joined
+
+
+def test_layer_seven_dns_fact_never_prints_none_when_tcp_never_resolved_a_target():
+    # DNS and TCP are collected independently: DNS can succeed while every TCP
+    # candidate fails to connect, leaving no chosen target IP on the trace.
+    trace = full_trace()
+    trace["tcp"] = {"observed": False, "why_not": "no candidate accepted a connection"}
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l7"]["facts"])
+    assert "None" not in joined
+    assert "DNS: example.com resolved" in joined
+
+
+def test_layer_seven_status_line_never_prints_none_when_protocol_and_status_are_absent():
+    # A malformed HTTP status line yields protocol=None, status=None from
+    # parse_response even though the section is otherwise observed.
+    trace = full_trace()
+    trace["http"]["final"]["protocol"] = None
+    trace["http"]["final"]["status"] = None
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l7"]["facts"])
+    assert "None" not in joined
+
+
+def test_all_optional_sub_fields_none_never_prints_the_literal_none():
+    trace = full_trace()
+    trace["local"].update(link=None, mtu=None, local_ip=None, local_mac=None,
+                           gateway_mac=None, public_ip=None, nat=None)
+    trace["dns"].update(dnssec=None, delegation=None, alpn_advertised=None,
+                         ech=None, timing_ms=None)
+    trace["tcp"].update(winner_family=None, local=None,
+                         kernel={"rtt_ms": None, "mss": None,
+                                 "retransmits": None, "source": None})
+    trace["tls"].update(version=None, cipher=None, alpn=None,
+                         handshake_ms=None, chain=[], trust_root=None,
+                         resumption=None)
+    trace["http"]["final"].update(protocol=None, status=None, reason=None,
+                                   encoding=None, ratio=None, content_type=None)
+    trace["path"].update(hops=[], asn_path=None, path_mtu=None)
+
+    osi = schema.build_osi(trace)
+    for layer, val in osi.items():
+        for fact in val["facts"]:
+            assert "None" not in fact, f"{layer}: leaked None in fact: {fact!r}"
