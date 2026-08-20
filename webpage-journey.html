@@ -1,0 +1,1193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>What Really Happens When You Load a Webpage</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --card-bg:        #ffffff;
+
+    /* OSI categorical slots, fixed order (identity, not magnitude) */
+    --l7: #2a78d6; /* blue    - Application */
+    --l6: #eb6834; /* orange  - Presentation */
+    --l5: #1baf7a; /* aqua    - Session */
+    --l4: #eda100; /* yellow  - Transport */
+    --l3: #e87ba4; /* magenta - Network */
+    --l2: #008300; /* green   - Data Link */
+    --l1: #4a3aa7; /* violet  - Physical */
+
+    --good: #0ca30c;
+    --critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --card-bg:        #212120;
+
+      --l7: #3987e5;
+      --l6: #d95926;
+      --l5: #199e70;
+      --l4: #c98500;
+      --l3: #d55181;
+      --l2: #008300;
+      --l1: #9085e9;
+
+      --good: #0ca30c;
+      --critical: #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page:           #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --card-bg:        #212120;
+
+    --l7: #3987e5;
+    --l6: #d95926;
+    --l5: #199e70;
+    --l4: #c98500;
+    --l3: #d55181;
+    --l2: #008300;
+    --l1: #9085e9;
+
+    --good: #0ca30c;
+    --critical: #e66767;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 28px 24px 80px;
+  }
+
+  /* ---------- Header ---------- */
+  header.page-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 24px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+  }
+  .kicker {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin: 0 0 6px;
+  }
+  h1 {
+    font-size: 28px;
+    line-height: 1.25;
+    margin: 0 0 8px;
+    max-width: 640px;
+    letter-spacing: -0.01em;
+  }
+  .lede {
+    color: var(--text-secondary);
+    font-size: 15px;
+    max-width: 560px;
+    margin: 0;
+  }
+  .theme-btn {
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text-primary);
+    padding: 8px 12px;
+    font-size: 13px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .theme-btn:hover { border-color: var(--text-muted); }
+
+  /* ---------- Controls bar ---------- */
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: center;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 14px 16px;
+    margin-bottom: 22px;
+  }
+  .control-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .segmented {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .segmented button {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .segmented button.active {
+    background: var(--l7);
+    color: #fff;
+  }
+  .toggle-row { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+  .toggle-row input { accent-color: var(--l7); }
+
+  .url-form {
+    display: flex;
+    gap: 8px;
+    flex: 1;
+    min-width: 260px;
+  }
+  .url-form input[type="text"] {
+    flex: 1;
+    font-family: ui-monospace, monospace;
+    font-size: 13px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface-1);
+    color: var(--text-primary);
+  }
+  .btn-primary {
+    background: var(--l7);
+    color: #fff;
+    border: none;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-primary:disabled { opacity: 0.5; cursor: default; }
+  .btn-ghost {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 8px 14px;
+    font-size: 13px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  /* ---------- Live lookup panel ---------- */
+  .live-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: -10px 0 18px;
+    line-height: 1.5;
+    max-width: 900px;
+  }
+  .live-panel {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px 16px;
+    margin-bottom: 22px;
+    display: none;
+  }
+  .live-panel.show { display: block; }
+  .live-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .live-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    flex: none;
+  }
+  .live-dot.loading { background: var(--l4); animation: livePulse 1s ease-in-out infinite; }
+  .live-dot.ok { background: var(--good); }
+  .live-dot.error { background: var(--critical); }
+  @keyframes livePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .live-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px 18px;
+    margin-top: 10px;
+  }
+  .live-grid .k {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+  }
+  .live-grid .v {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    color: var(--text-primary);
+    word-break: break-word;
+  }
+  .live-callout {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border-left: 3px solid var(--good);
+    background: var(--surface-1);
+    border-radius: 3px;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+  }
+  .live-callout code {
+    background: var(--border);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .https-note-inline {
+    margin-top: 10px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
+  /* ---------- Connection track ---------- */
+  .track-wrap {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 18px 22px 22px;
+    margin-bottom: 26px;
+  }
+  .track-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .track {
+    position: relative;
+    height: 6px;
+    background: var(--gridline);
+    border-radius: 3px;
+  }
+  .track-fill {
+    position: absolute;
+    top: 0; left: 0; height: 100%;
+    width: 0%;
+    background: var(--l7);
+    border-radius: 3px;
+    transition: width 0.5s ease;
+  }
+  .track-dot {
+    position: absolute;
+    top: 50%;
+    left: 0%;
+    width: 14px; height: 14px;
+    background: var(--l7);
+    border: 2px solid var(--card-bg);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    transition: left 0.5s ease, background 0.3s ease;
+    box-shadow: 0 0 0 3px var(--border);
+  }
+  .track-caption {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+    min-height: 16px;
+  }
+
+  /* ---------- Main grid ---------- */
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 26px;
+    align-items: start;
+  }
+  @media (max-width: 860px) {
+    .main-grid { grid-template-columns: 1fr; }
+    .osi-panel { position: static !important; }
+  }
+
+  /* ---------- Step cards ---------- */
+  .steps { display: flex; flex-direction: column; gap: 10px; }
+
+  .step-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--gridline);
+    border-radius: 4px;
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: border-color 0.25s ease, box-shadow 0.25s ease;
+  }
+  .step-card.has-layer { border-left-color: var(--step-color, var(--gridline)); }
+  .step-card.active-step {
+    box-shadow: 0 0 0 2px var(--step-color, var(--l7));
+  }
+  .step-card[data-https-only="1"].hidden-https { display: none; }
+
+  .step-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .step-num {
+    flex: none;
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+    color: var(--text-secondary);
+  }
+  .step-titles { flex: 1; min-width: 0; }
+  .step-phase {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin: 0 0 2px;
+  }
+  .step-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+  }
+  .step-chips {
+    display: flex;
+    gap: 4px;
+    flex: none;
+  }
+  .chip {
+    font-size: 10px;
+    font-weight: 700;
+    color: #fff;
+    padding: 2px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .step-caret {
+    font-size: 12px;
+    color: var(--text-muted);
+    transform: rotate(0deg);
+    transition: transform 0.2s ease;
+    flex: none;
+  }
+  .step-card.expanded .step-caret { transform: rotate(90deg); }
+
+  .step-body {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+  }
+  .step-card.expanded .step-body { max-height: 600px; }
+  .step-body-inner {
+    padding-top: 12px;
+    margin-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+  .step-body-inner .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    font-weight: 700;
+    margin: 10px 0 4px;
+  }
+  .step-body-inner .label:first-child { margin-top: 0; }
+  .step-body-inner code.block {
+    display: block;
+    white-space: pre-wrap;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--text-primary);
+    margin-top: 4px;
+  }
+  .https-note {
+    margin-top: 8px;
+    font-size: 12.5px;
+    color: var(--critical);
+    display: none;
+  }
+  .https-note.show { display: block; }
+
+  /* ---------- OSI panel ---------- */
+  .osi-panel {
+    position: sticky;
+    top: 20px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 16px;
+  }
+  .osi-panel h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 4px;
+  }
+  .osi-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 0 0 14px;
+  }
+  .osi-dir {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+  }
+  .osi-stack { display: flex; flex-direction: column; gap: 3px; }
+  .osi-layer {
+    background: var(--layer-color);
+    color: #fff;
+    padding: 8px 10px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    opacity: 0.32;
+    transition: opacity 0.25s ease, transform 0.15s ease;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border: none;
+    width: 100%;
+    text-align: left;
+    font-family: inherit;
+  }
+  .osi-layer .n { font-size: 10px; opacity: 0.85; font-weight: 700; }
+  .osi-layer.primary { opacity: 1; transform: scale(1.02); box-shadow: 0 0 0 2px var(--card-bg), 0 0 0 3px var(--layer-color); }
+  .osi-layer.secondary { opacity: 0.65; }
+  .osi-layer.selected { outline: 2px solid var(--text-primary); outline-offset: -2px; }
+
+  .osi-detail {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    line-height: 1.55;
+    min-height: 70px;
+  }
+  .osi-detail strong { color: var(--text-primary); }
+
+  footer.foot {
+    margin-top: 40px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    font-size: 12.5px;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="page-head">
+    <div>
+      <p class="kicker">DevOps Mentor &middot; Interactive Walkthrough</p>
+      <h1>What really happens when you load a webpage</h1>
+      <p class="lede">Follow one request from keystroke to rendered pixels &mdash; and see exactly which layer of the OSI model is doing the work at each step.</p>
+    </div>
+    <button class="theme-btn" id="themeToggle">Dark mode</button>
+  </header>
+
+  <div class="controls">
+    <div class="url-form">
+      <input type="text" id="urlInput" value="https://example.com/dashboard" class="mono">
+      <button class="btn-primary" id="goBtn">Go &rarr;</button>
+    </div>
+    <button class="btn-ghost" id="resetBtn">Reset</button>
+    <div class="control-group">
+      <span>View:</span>
+      <div class="segmented" id="levelToggle">
+        <button data-level="simple" class="active">Simple</button>
+        <button data-level="technical">Technical</button>
+      </div>
+    </div>
+    <label class="toggle-row">
+      <input type="checkbox" id="httpsToggle" checked>
+      Use HTTPS
+    </label>
+  </div>
+  <p class="live-hint">Enter any real domain above and click Go &mdash; DNS records, TTLs, and the resolved IP's network/location are fetched live via public DNS-over-HTTPS resolvers (Google &amp; Cloudflare), not hardcoded. TCP/TLS internals aren't visible to browser JavaScript &mdash; the companion Python script below shows those for real.</p>
+
+  <div class="live-panel" id="livePanel">
+    <div class="live-panel-head">
+      <span class="live-dot" id="liveStatusDot"></span>
+      <span id="liveStatusText">No live lookup yet.</span>
+    </div>
+    <div class="live-grid" id="liveGrid"></div>
+  </div>
+
+  <div class="track-wrap">
+    <div class="track-labels">
+      <span>🖥 Your browser</span>
+      <span>☁ Server / infrastructure</span>
+    </div>
+    <div class="track">
+      <div class="track-fill" id="trackFill"></div>
+      <div class="track-dot" id="trackDot"></div>
+    </div>
+    <p class="track-caption" id="trackCaption">Click &ldquo;Go&rdquo; or step through the cards below to watch the request travel.</p>
+  </div>
+
+  <div class="main-grid">
+    <div class="steps" id="stepsContainer"></div>
+
+    <aside class="osi-panel">
+      <h2>The OSI model</h2>
+      <p class="osi-sub">7 layers, each with one job. Click a layer, or step through the journey to see which ones light up.</p>
+      <div class="osi-dir"><span>Closest to the user</span><span>Closest to the wire</span></div>
+      <div class="osi-stack" id="osiStack"></div>
+      <div class="osi-detail" id="osiDetail">Select a layer above, or trigger a step in the journey, to see its explanation here.</div>
+    </aside>
+  </div>
+
+  <footer class="foot">
+    Built as a teaching aid: the exact sequence, header names, and cache behavior vary by browser, CDN, and stack &mdash; treat this as the mental model, not a packet-level spec. When something is genuinely uncertain for your environment (e.g. a specific CDN's cache key rules), verify against that vendor's documentation.
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------- Data ----------------
+  var LAYERS = [
+    { n: 7, key: "l7", name: "Application", proto: "HTTP, DNS, gRPC, SMTP", desc: "The protocols your application actually speaks. This is where an API gateway or Application Load Balancer makes routing decisions based on hostname, path, or headers &mdash; not just an IP address." },
+    { n: 6, key: "l6", name: "Presentation", proto: "TLS/SSL, compression, encoding", desc: "Translates data format between the application and the network: encryption/decryption, compression, character encoding. In practice, most real stacks fold this into libraries used at the application layer &mdash; it's the layer with the fuzziest real-world boundary." },
+    { n: 5, key: "l5", name: "Session", proto: "Session establishment", desc: "Manages the lifetime of a connection between two applications: opening, maintaining, and tearing it down. Like Presentation, modern implementations mostly absorb this into Transport or Application-layer code rather than treating it as a distinct thing you configure." },
+    { n: 4, key: "l4", name: "Transport", proto: "TCP, UDP, ports", desc: "End-to-end delivery between two hosts. TCP guarantees ordered, reliable delivery and retransmits lost data; UDP is fast with no guarantees. Ports (:443, :8080) live here. An L4 load balancer routes on IP + port only &mdash; it can't see what's inside the packet." },
+    { n: 3, key: "l3", name: "Network", proto: "IP, routing, CIDR", desc: "Routing between different networks. IP addresses and CIDR blocks live here &mdash; this is the layer a router operates at, deciding whether a packet needs to leave the local subnet and where it goes next." },
+    { n: 2, key: "l2", name: "Data Link", proto: "Ethernet, MAC, switches", desc: "Moves frames between devices on the same local network. MAC addresses and switches live here. A switch makes its forwarding decisions at this layer, not the IP layer." },
+    { n: 1, key: "l1", name: "Physical", proto: "Cables, fiber, radio", desc: "The actual bits on the wire &mdash; electrical signaling on copper, light pulses in fiber, radio waves over Wi-Fi. If a cable is unplugged or a fiber run is damaged, this is where you're failing." }
+  ];
+
+  var JOURNEY = [
+    {
+      phase: "Before anything leaves your machine",
+      title: "You hit Enter",
+      simple: "Your browser checks whether it already knows the answer before doing any network work at all.",
+      technical: "The browser checks its HTTP cache for a fresh, unexpired response to this exact URL, checks the HSTS preload list to see if it must force HTTPS, and &mdash; if a Service Worker is registered for this origin &mdash; may let that script answer from its own cache with zero network traffic.",
+      layers: [],
+      pos: 2
+    },
+    {
+      phase: "Finding the address",
+      title: "DNS Resolution",
+      simple: "Your computer translates the human-readable domain name into a numeric IP address, the same way you'd look up a phone number by a name.",
+      technical: "Checks cascade in order: browser DNS cache &rarr; OS resolver cache &rarr; hosts file &rarr; configured recursive resolver (your ISP, or a public one like 1.1.1.1 / 8.8.8.8). If nothing is cached, the resolver walks the hierarchy: root server &rarr; TLD server (.com) &rarr; authoritative nameserver for the domain, which returns the A record (IPv4) or AAAA record (IPv6). The result is cached locally for its TTL &mdash; here, 300 seconds &mdash; so a second visit within that window skips the lookup entirely. The address returned is almost always a <em>public</em> IP owned by a CDN or cloud provider's edge network; once the request is inside that provider, it's often re-routed across private RFC&nbsp;1918 space (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 &mdash; the same private ranges from CIDR subnetting) to reach the actual backend.",
+      code: "; type  ttl  class  data\nexample.com.  300  IN  A     93.184.216.34\nexample.com.  300  IN  AAAA  2606:2800:220:1:248:1893:25c8:1946\n\n; a CNAME chain looks like:\nwww.example.com.  300  IN  CNAME  example.com.\nexample.com.       300  IN  A      93.184.216.34",
+      layers: [ {n:7,w:"primary"}, {n:4,w:"secondary"}, {n:3,w:"secondary"} ],
+      pos: 12
+    },
+    {
+      phase: "Opening the pipe",
+      title: "TCP Connection",
+      simple: "Your browser and the server do a quick three-step handshake to confirm they're both ready to talk reliably.",
+      technical: "SYN &rarr; SYN-ACK &rarr; ACK. This establishes a reliable, ordered, bidirectional byte stream on top of unreliable IP: lost packets are retransmitted, and out-of-order packets are reassembled before your app ever sees them. Your OS picks a random unused local <strong>ephemeral port</strong> (roughly 32768&ndash;60999) for the client side, while the server listens on a well-known port &mdash; 443 for HTTPS, 80 for HTTP. That client-IP:port + server-IP:port pair is a full TCP connection; the same client can hold thousands of simultaneous connections to different servers because each pair is unique.<br><br><strong>TCP vs. UDP:</strong> TCP trades speed for reliability, so it's the default for HTTP/1.1 and HTTP/2. UDP has no handshake, ordering, or retransmission &mdash; it just fires packets and hopes. That statelessness is exactly why DNS queries typically use UDP (one quick round trip, retry if nothing comes back) and why QUIC, the transport under HTTP/3, is built on UDP too: it re-implements reliability itself, but avoids TCP's head-of-line blocking, where one lost packet stalls every stream on the connection.",
+      code: "Client 203.0.113.42:54213  →  Server 93.184.216.34:443\n\nClient → SYN         (seq=1000)\nServer → SYN, ACK    (seq=5000, ack=1001)\nClient → ACK         (ack=5001)\n\n[connection established — data can now flow both ways]",
+      layers: [ {n:4,w:"primary"}, {n:3,w:"secondary"}, {n:2,w:"secondary"}, {n:1,w:"secondary"} ],
+      pos: 24
+    },
+    {
+      phase: "Locking the pipe",
+      title: "TLS Handshake",
+      httpsOnly: true,
+      simple: "Before any real data is sent, the browser and server agree on encryption keys so nobody in between can read or tamper with the traffic.",
+      technical: "ClientHello (supported cipher suites + <strong>SNI</strong> hostname, so a server hosting many sites on one IP knows which certificate to present) &rarr; ServerHello + certificate chain &rarr; browser validates the chain against trusted CAs (checking the signature, expiry, hostname match, and revocation status) &rarr; key exchange (typically ECDHE over curve x25519) derives a shared session key that never travels over the wire itself &rarr; Finished messages confirm both sides derived the same key. TLS 1.3 does this in one round trip; TLS 1.2 needs two. After this, every byte &mdash; including the HTTP headers and cookies in the next step &mdash; is symmetrically encrypted with that session key.",
+      code: "ClientHello:\n  SNI = example.com\n  supported_versions = [TLS 1.3, TLS 1.2]\n\nServerHello:\n  version = TLS 1.3\n  cipher_suite = TLS_AES_128_GCM_SHA256\n  key_share = x25519\n\nCertificate:\n  Subject: CN=example.com\n  Issuer:  R3 (Let's Encrypt)\n  Valid:   until 2026-11-02\n\n[Finished — session key derived, connection now encrypted]",
+      layers: [ {n:6,w:"primary"}, {n:5,w:"secondary"} ],
+      pos: 34
+    },
+    {
+      phase: "Asking for the page",
+      title: "HTTP Request Sent",
+      simple: "Your browser sends a structured request: which page it wants, plus context like your browser type and any login cookies.",
+      technical: "Sent over the now-established (and, if HTTPS, encrypted) TCP stream. With HTTP/2 or HTTP/3 this can be multiplexed with other requests over the same connection instead of opening a new one per resource.",
+      code: "GET /dashboard HTTP/2\nHost: example.com\nCookie: session=abc123\nAccept: text/html\nUser-Agent: Mozilla/5.0 ...",
+      layers: [ {n:7,w:"primary"} ],
+      pos: 45
+    },
+    {
+      phase: "Arriving at the edge",
+      title: "Request Reaches Your Infrastructure",
+      simple: "The request lands on infrastructure your team controls &mdash; often a CDN or load balancer &mdash; before it ever reaches application code.",
+      technical: "A CDN edge node may serve a cached response immediately (cache HIT &mdash; the journey effectively ends here). Otherwise: an <strong>L4 load balancer</strong> routes purely by IP:port with no visibility into request content, or an <strong>L7 load balancer / ingress controller</strong> reads the Host header and URL path to pick the right backend service &mdash; e.g. /api/* to one service, everything else to another. A WAF or rate limiter may inspect and reject the request before your app ever sees it. Once past the load balancer, the request typically moves into a private subnet: this is where the CIDR block a platform team provisions actually gets used.",
+      code: "Public entry point:\n  93.184.216.34:443  →  Application Load Balancer\n\nRouting rule (L7, by path):\n  Host: example.com, Path: /api/*   → target group: api-service\n  Host: example.com, Path: /*       → target group: web-frontend\n\nBackend targets (private subnet):\n  10.0.2.0/24  →  web-frontend-1 (10.0.2.14)\n                  web-frontend-2 (10.0.2.19)\n                  web-frontend-3 (10.0.2.27)",
+      layers: [ {n:7,w:"primary"}, {n:4,w:"primary"}, {n:3,w:"secondary"} ],
+      pos: 58
+    },
+    {
+      phase: "Doing the work",
+      title: "Server-Side Processing",
+      simple: "Your application code runs: checking who you are, fetching data, applying business logic, and preparing a response.",
+      technical: "Middleware runs (auth, logging, rate limiting) &rarr; router matches the path to a handler &rarr; handler queries a database or cache (Redis/Memcached) &rarr; business logic executes &rarr; response body is assembled (server-rendered HTML, or a JSON payload for a client-rendered app). This step is pure application logic &mdash; it's what happens after Layer 7 delivers the request, not a layer itself.",
+      layers: [],
+      pos: 68
+    },
+    {
+      phase: "Sending the answer",
+      title: "HTTP Response Sent Back",
+      simple: "The server sends back a status code (did it work?), some headers (metadata), and the actual content.",
+      technical: "Travels back over the same TCP/TLS connection that's still open, avoiding a fresh handshake. The status code is the first thing worth reading &mdash; it tells you which of five broad outcomes happened before you even look at the body.",
+      code: "HTTP/2 200 OK\nContent-Type: text/html\nCache-Control: max-age=300\nSet-Cookie: session=abc123; Secure; HttpOnly\n\n&lt;html&gt;...&lt;/html&gt;\n\n— common status codes —\n200 OK              request succeeded\n301 Moved Perm.      redirect, update bookmarks/links\n304 Not Modified     use your cached copy, body omitted\n404 Not Found        no resource at this path\n500 Internal Error   your app crashed handling it\n502 Bad Gateway       load balancer got a bad reply from the app\n503 Unavailable      app is overloaded or down for maintenance",
+      layers: [ {n:7,w:"primary"} ],
+      pos: 78
+    },
+    {
+      phase: "Turning bytes into pixels",
+      title: "Browser Parses & Renders",
+      simple: "Your browser reads the HTML and progressively builds the page you see, fetching extra files like images and stylesheets along the way.",
+      technical: "HTML is parsed incrementally into the DOM. CSS is parsed into the CSSOM (render-blocking by default). Synchronous &lt;script&gt; tags block HTML parsing unless marked async/defer. DOM + CSSOM merge into a Render Tree → Layout computes exact geometry → Paint fills in pixels → Compositing assembles layers, often GPU-accelerated, into the final frame. Referenced images, fonts, and scripts trigger their own requests &mdash; over HTTP/2 or HTTP/3 these are typically multiplexed over the connection that's already open, reusing the same TCP/TLS session instead of repeating steps 3 and 4 for every single file.",
+      code: "Parsing index.html finds:\n  &lt;link rel=\"stylesheet\" href=\"/style.css\"&gt;\n  &lt;script src=\"/app.js\" defer&gt;&lt;/script&gt;\n  &lt;img src=\"/logo.png\"&gt;\n\n3 more requests fire — same connection, no new handshake:\n  GET /style.css   → 200, 4.1 KB\n  GET /app.js       → 200, 61 KB\n  GET /logo.png     → 200, 12 KB (or 304 if cached)",
+      layers: [],
+      pos: 90
+    },
+    {
+      phase: "Ready for you",
+      title: "Page Becomes Interactive",
+      simple: "JavaScript finishes running and the page starts responding to your clicks and scrolls.",
+      technical: "Deferred and async scripts finish executing, event listeners attach, and the browser fires events like DOMContentLoaded and load. Frameworks may then hydrate server-rendered markup into a fully interactive client-side app. This is what Core Web Vitals like Time to Interactive (TTI) and Largest Contentful Paint (LCP) are measuring.",
+      layers: [],
+      pos: 98
+    }
+  ];
+
+  var LAYER_COLOR_VARS = {1:"--l1",2:"--l2",3:"--l3",4:"--l4",5:"--l5",6:"--l6",7:"--l7"};
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // ---------------- Live DNS / network lookup ----------------
+  var liveData = null;       // populated after a successful lookup
+  var liveState = "idle";    // idle | loading | ok | error
+  var liveError = "";
+
+  function fetchWithTimeout(url, opts, timeoutMs) {
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, timeoutMs || 6000);
+    var merged = Object.assign({}, opts || {}, { signal: controller.signal });
+    return fetch(url, merged).finally(function () { clearTimeout(timer); });
+  }
+
+  function parseHostFromInput(value) {
+    try {
+      var v = (value || "").trim();
+      if (!v) return null;
+      if (!/^https?:\/\//i.test(v)) v = "https://" + v;
+      var u = new URL(v);
+      return u.hostname || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function dohQuery(host, type) {
+    var googleUrl = "https://dns.google/resolve?name=" + encodeURIComponent(host) + "&type=" + type;
+    return fetchWithTimeout(googleUrl, {}, 6000)
+      .then(function (r) { if (!r.ok) throw new Error("bad status"); return r.json(); })
+      .catch(function () {
+        var cfUrl = "https://cloudflare-dns.com/dns-query?name=" + encodeURIComponent(host) + "&type=" + type;
+        return fetchWithTimeout(cfUrl, { headers: { accept: "application/dns-json" } }, 6000)
+          .then(function (r) { return r.json(); });
+      });
+  }
+
+  async function performLiveLookup(rawValue) {
+    var host = parseHostFromInput(rawValue);
+    liveData = null;
+    liveError = "";
+    liveState = "loading";
+    renderLivePanel();
+
+    if (!host) {
+      liveState = "error";
+      liveError = "Couldn't parse a hostname out of that — try something like example.com or https://example.com/path.";
+      renderLivePanel();
+      refreshAllBodies();
+      return;
+    }
+
+    var types = ["A", "AAAA", "CNAME", "MX", "NS", "TXT"];
+    var data = { host: host };
+    try {
+      var results = await Promise.all(types.map(function (t) {
+        return dohQuery(host, t).catch(function () { return null; });
+      }));
+      types.forEach(function (t, i) {
+        var res = results[i];
+        var answers = (res && res.Answer) || [];
+        data[t] = answers.map(function (a) { return { data: String(a.data), ttl: a.TTL }; });
+      });
+    } catch (e) {
+      liveState = "error";
+      liveError = "DNS lookup failed — public DNS-over-HTTPS resolvers may be blocked on this network.";
+      renderLivePanel();
+      refreshAllBodies();
+      return;
+    }
+
+    var ipv4 = data.A.map(function (a) { return a.data; });
+    var ipv6 = data.AAAA.map(function (a) { return a.data; });
+    data.targetIp = ipv4[0] || ipv6[0] || null;
+
+    if (!data.targetIp) {
+      liveData = data;
+      liveState = "error";
+      liveError = '"' + host + '" didn\'t resolve to any IP address — double-check the spelling, or it may not exist.';
+      renderLivePanel();
+      refreshAllBodies();
+      return;
+    }
+
+    try {
+      var geoRes = await fetchWithTimeout("https://ipwho.is/" + encodeURIComponent(data.targetIp), {}, 5000);
+      var geoJson = await geoRes.json();
+      if (geoJson && geoJson.success !== false) data.geo = geoJson;
+    } catch (e) { /* geolocation is best-effort — lookup still succeeds without it */ }
+
+    try {
+      var probeRes = await fetchWithTimeout((httpsOn ? "https://" : "http://") + host + "/", { mode: "cors" }, 5000);
+      data.httpProbe = {
+        ok: true,
+        status: probeRes.status,
+        statusText: probeRes.statusText,
+        headers: Array.from(probeRes.headers.entries())
+      };
+    } catch (e) {
+      data.httpProbe = { ok: false };
+    }
+
+    liveData = data;
+    liveState = "ok";
+    renderLivePanel();
+    refreshAllBodies();
+  }
+
+  function renderLivePanel() {
+    var panel = document.getElementById("livePanel");
+    var dot = document.getElementById("liveStatusDot");
+    var text = document.getElementById("liveStatusText");
+    var grid = document.getElementById("liveGrid");
+    panel.classList.add("show");
+    dot.className = "live-dot " + (liveState === "ok" ? "ok" : liveState === "error" ? "error" : "loading");
+
+    if (liveState === "loading") {
+      text.textContent = "Looking up real DNS data…";
+      grid.innerHTML = "";
+      return;
+    }
+    if (liveState === "error") {
+      text.textContent = liveError || "Lookup failed.";
+      grid.innerHTML = "";
+      return;
+    }
+
+    var d = liveData;
+    text.textContent = "Live data for " + d.host;
+    var cells = [];
+    cells.push(["IPv4 (A)", d.A.length ? d.A.map(function (a) { return a.data; }).join(", ") : "none published"]);
+    if (d.AAAA.length) cells.push(["IPv6 (AAAA)", d.AAAA.map(function (a) { return a.data; }).join(", ")]);
+    if (d.CNAME.length) cells.push(["CNAME", d.CNAME.map(function (a) { return a.data; }).join(" → ")]);
+    var ttlSource = d.A[0] || d.AAAA[0];
+    cells.push(["TTL", ttlSource ? ttlSource.ttl + "s" : "?"]);
+    if (d.NS.length) cells.push(["Nameservers", d.NS.map(function (a) { return a.data; }).join(", ")]);
+    if (d.MX.length) cells.push(["Mail (MX)", d.MX.map(function (a) { return a.data; }).join(", ")]);
+    if (d.geo) {
+      cells.push(["Location", [d.geo.city, d.geo.region, d.geo.country].filter(Boolean).join(", ") || "unknown"]);
+      var conn = d.geo.connection || {};
+      cells.push(["Network / ASN", "AS" + (conn.asn || "?") + " " + (conn.org || conn.isp || "")]);
+    }
+    grid.innerHTML = cells.map(function (c) {
+      return '<div><div class="k">' + escapeHtml(c[0]) + '</div><div class="v">' + escapeHtml(c[1]) + "</div></div>";
+    }).join("");
+  }
+
+  function buildDnsCode(defaultCode) {
+    if (!liveData || liveState !== "ok") return defaultCode;
+    var d = liveData;
+    var lines = ["; live lookup for " + d.host + " (DNS-over-HTTPS, just now)", ""];
+    function add(label, arr, limit) {
+      if (!arr.length) { lines.push(label + "  —  no record published"); return; }
+      arr.slice(0, limit || arr.length).forEach(function (a) {
+        lines.push(d.host + ".  " + a.ttl + "  IN  " + label + "  " + a.data);
+      });
+      if (limit && arr.length > limit) lines.push("  ... " + (arr.length - limit) + " more " + label + " records");
+    }
+    add("A", d.A);
+    add("AAAA", d.AAAA);
+    if (d.CNAME.length) add("CNAME", d.CNAME);
+    if (d.MX.length) add("MX", d.MX);
+    if (d.NS.length) add("NS", d.NS);
+    if (d.TXT.length) add("TXT", d.TXT, 4);
+    return escapeHtml(lines.join("\n"));
+  }
+
+  function buildTcpCode(defaultCode) {
+    if (!liveData || liveState !== "ok" || !liveData.targetIp) return defaultCode;
+    var port = httpsOn ? 443 : 80;
+    var lines = [
+      "Client <your device>:XXXXX (ephemeral — illustrative)",
+      "   →  Server " + liveData.targetIp + ":" + port + "   (real IP, resolved live)",
+      "",
+      "Client → SYN         (seq=1000)         ← sequence numbers are illustrative;",
+      "Server → SYN, ACK    (seq=5000, ack=1001)   browser JS can't read real ones.",
+      "Client → ACK         (ack=5001)            Run the Python script for real values.",
+      "",
+      "[connection established — data can now flow both ways]"
+    ];
+    return escapeHtml(lines.join("\n"));
+  }
+
+  // ---------------- Build OSI stack ----------------
+  var osiStackEl = document.getElementById("osiStack");
+  var osiDetailEl = document.getElementById("osiDetail");
+  var osiButtons = {};
+
+  LAYERS.forEach(function (layer) {
+    var btn = document.createElement("button");
+    btn.className = "osi-layer";
+    btn.style.setProperty("--layer-color", "var(" + LAYER_COLOR_VARS[layer.n] + ")");
+    btn.innerHTML = '<span>L' + layer.n + ' &middot; ' + layer.name + '</span><span class="n">' + layer.proto + '</span>';
+    btn.addEventListener("click", function () {
+      showLayerDetail(layer, true);
+    });
+    osiStackEl.appendChild(btn);
+    osiButtons[layer.n] = btn;
+  });
+
+  function showLayerDetail(layer, manual) {
+    osiDetailEl.innerHTML = '<strong>L' + layer.n + ' — ' + layer.name + '</strong><br>' + layer.desc;
+    if (manual) {
+      Object.keys(osiButtons).forEach(function (n) {
+        osiButtons[n].classList.remove("selected");
+      });
+      osiButtons[layer.n].classList.add("selected");
+    }
+  }
+
+  function highlightLayers(layerList) {
+    Object.keys(osiButtons).forEach(function (n) {
+      osiButtons[n].classList.remove("primary", "secondary");
+    });
+    (layerList || []).forEach(function (l) {
+      var btn = osiButtons[l.n];
+      if (btn) btn.classList.add(l.w === "primary" ? "primary" : "secondary");
+    });
+  }
+
+  // ---------------- Build step cards ----------------
+  var stepsContainer = document.getElementById("stepsContainer");
+  var levelState = "simple";
+  var httpsOn = true;
+  var cardEls = [];
+
+  function primaryLayerVar(step) {
+    var primary = (step.layers || []).find(function (l) { return l.w === "primary"; });
+    if (!primary) return null;
+    return "var(" + LAYER_COLOR_VARS[primary.n] + ")";
+  }
+
+  JOURNEY.forEach(function (step, idx) {
+    var card = document.createElement("div");
+    card.className = "step-card";
+    if (step.httpsOnly) card.dataset.httpsOnly = "1";
+    var colorVar = primaryLayerVar(step);
+    if (colorVar) {
+      card.classList.add("has-layer");
+      card.style.setProperty("--step-color", colorVar);
+    }
+
+    var chips = (step.layers || []).map(function (l) {
+      return '<span class="chip" style="background:var(' + LAYER_COLOR_VARS[l.n] + ')">L' + l.n + '</span>';
+    }).join("");
+
+    card.innerHTML =
+      '<div class="step-head">' +
+        '<div class="step-num">' + (idx + 1) + '</div>' +
+        '<div class="step-titles">' +
+          '<p class="step-phase">' + step.phase + '</p>' +
+          '<p class="step-title">' + step.title + '</p>' +
+        '</div>' +
+        '<div class="step-chips">' + chips + '</div>' +
+        '<div class="step-caret">&#9656;</div>' +
+      '</div>' +
+      '<div class="step-body"><div class="step-body-inner"></div></div>';
+
+    stepsContainer.appendChild(card);
+    cardEls.push(card);
+
+    card.addEventListener("click", function () {
+      var willExpand = !card.classList.contains("expanded");
+      cardEls.forEach(function (c) { c.classList.remove("expanded"); });
+      if (willExpand) {
+        card.classList.add("expanded");
+        renderStepBody(card, step);
+        setActiveStep(idx, false);
+      } else {
+        highlightLayers([]);
+        setTrack(null);
+      }
+    });
+  });
+
+  function renderStepBody(card, step) {
+    var inner = card.querySelector(".step-body-inner");
+    var text = levelState === "simple" ? step.simple : step.technical;
+    var html = "<div>" + text + "</div>";
+
+    if (step.title === "Request Reaches Your Infrastructure" && liveData && liveData.geo) {
+      var geo = liveData.geo, conn = geo.connection || {};
+      html += '<div class="live-callout"><strong>Real signal for ' + escapeHtml(liveData.targetIp) + ':</strong> ' +
+        escapeHtml(conn.org || conn.isp || "unknown network") + ', AS' + escapeHtml(String(conn.asn || "?")) +
+        ', ' + escapeHtml([geo.city, geo.country].filter(Boolean).join(", ") || "location unknown") +
+        '. (The routing rule below is a generic illustration of how an L7 load balancer decides — this line is what tells you whose infrastructure the request actually lands on.)</div>';
+    }
+    if (step.title === "TLS Handshake") {
+      html += '<p class="https-note-inline">Browsers deliberately don\'t expose raw TLS handshake internals to JavaScript, so this step stays illustrative here regardless of the domain above. Run the companion Python script against ' +
+        escapeHtml(liveData ? liveData.host : "this domain") + ' to see its actual negotiated cipher suite and certificate.</p>';
+    }
+    if (step.title === "HTTP Response Sent Back" && liveData && liveData.httpProbe) {
+      if (liveData.httpProbe.ok) {
+        html += '<div class="live-callout"><strong>Live probe:</strong> a cross-origin request to this page just now returned <code>' +
+          liveData.httpProbe.status + ' ' + escapeHtml(liveData.httpProbe.statusText) + '</code>.' +
+          (liveData.httpProbe.headers.length ? ' Headers exposed to cross-origin JS: ' + liveData.httpProbe.headers.map(function (h) { return escapeHtml(h[0]); }).join(", ") + '.' : ' No headers were exposed to cross-origin JavaScript (normal — most sites don\'t opt in).') +
+          '</div>';
+      } else {
+        html += '<div class="live-callout">A live request to this page was blocked by the browser\'s CORS policy — expected for most sites, since reading cross-origin responses requires the target to opt in. Run the Python script for the real status code and full headers.</div>';
+      }
+    }
+
+    var codeContent = step.code;
+    if (step.title === "DNS Resolution") codeContent = buildDnsCode(step.code);
+    if (step.title === "TCP Connection") codeContent = buildTcpCode(step.code);
+
+    if (levelState === "technical" && codeContent) {
+      html += '<p class="label">On the wire</p><code class="block">' + codeContent + "</code>";
+    }
+    if (step.httpsOnly) {
+      html += '<p class="https-note' + (httpsOn ? "" : " show") + '">Without HTTPS, this step is skipped entirely — meaning the DNS lookup already happened in the clear, and everything from here on (headers, cookies, page content) travels as plain text that any network hop in between can read or modify.</p>';
+    }
+    inner.innerHTML = html;
+  }
+
+  function refreshAllBodies() {
+    cardEls.forEach(function (card, idx) {
+      if (card.classList.contains("expanded")) {
+        renderStepBody(card, JOURNEY[idx]);
+      }
+    });
+  }
+
+  // ---------------- Level toggle ----------------
+  var levelToggle = document.getElementById("levelToggle");
+  levelToggle.addEventListener("click", function (e) {
+    var btn = e.target.closest("button[data-level]");
+    if (!btn) return;
+    levelState = btn.dataset.level;
+    levelToggle.querySelectorAll("button").forEach(function (b) { b.classList.remove("active"); });
+    btn.classList.add("active");
+    refreshAllBodies();
+  });
+
+  // ---------------- HTTPS toggle ----------------
+  var httpsToggle = document.getElementById("httpsToggle");
+  var urlInput = document.getElementById("urlInput");
+  httpsToggle.addEventListener("change", function () {
+    httpsOn = httpsToggle.checked;
+    urlInput.value = urlInput.value.replace(/^https?:\/\//, httpsOn ? "https://" : "http://");
+    cardEls.forEach(function (card) {
+      card.classList.toggle("hidden-https", !httpsOn && card.dataset.httpsOnly === "1");
+    });
+    refreshAllBodies();
+  });
+
+  // ---------------- Track ----------------
+  var trackFill = document.getElementById("trackFill");
+  var trackDot = document.getElementById("trackDot");
+  var trackCaption = document.getElementById("trackCaption");
+
+  function setTrack(step) {
+    if (!step) {
+      trackFill.style.width = "0%";
+      trackDot.style.left = "0%";
+      trackCaption.textContent = 'Click “Go” or step through the cards below to watch the request travel.';
+      return;
+    }
+    trackFill.style.width = step.pos + "%";
+    trackDot.style.left = step.pos + "%";
+    trackCaption.textContent = step.phase + " — " + step.title;
+  }
+
+  function setActiveStep(idx, fromPlay) {
+    cardEls.forEach(function (c) { c.classList.remove("active-step"); });
+    cardEls[idx].classList.add("active-step");
+    var step = JOURNEY[idx];
+    highlightLayers(step.layers);
+    setTrack(step);
+    if ((step.layers || []).length) {
+      var primary = step.layers.find(function (l) { return l.w === "primary"; }) || step.layers[0];
+      var layerData = LAYERS.find(function (l) { return l.n === primary.n; });
+      if (layerData) showLayerDetail(layerData, false);
+    }
+    if (!fromPlay) {
+      cardEls[idx].scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }
+
+  // ---------------- Play button ----------------
+  var goBtn = document.getElementById("goBtn");
+  var resetBtn = document.getElementById("resetBtn");
+  var playing = false;
+  var playIdx = 0;
+  var playTimer = null;
+
+  function visibleIndices() {
+    var out = [];
+    JOURNEY.forEach(function (step, idx) {
+      if (step.httpsOnly && !httpsOn) return;
+      out.push(idx);
+    });
+    return out;
+  }
+
+  function stepPlay() {
+    var indices = visibleIndices();
+    if (playIdx >= indices.length) {
+      playing = false;
+      goBtn.disabled = false;
+      goBtn.textContent = "Go →";
+      trackCaption.textContent = "Request complete — page is interactive.";
+      return;
+    }
+    var idx = indices[playIdx];
+    cardEls.forEach(function (c) { c.classList.remove("expanded"); });
+    cardEls[idx].classList.add("expanded");
+    renderStepBody(cardEls[idx], JOURNEY[idx]);
+    setActiveStep(idx, true);
+    cardEls[idx].scrollIntoView({ behavior: "smooth", block: "center" });
+    playIdx++;
+    playTimer = setTimeout(stepPlay, 1900);
+  }
+
+  goBtn.addEventListener("click", async function () {
+    if (playing) return;
+    playing = true;
+    goBtn.disabled = true;
+    goBtn.textContent = "Looking up…";
+    trackCaption.textContent = "Fetching real DNS data before the request begins…";
+
+    await performLiveLookup(urlInput.value);
+
+    playIdx = 0;
+    goBtn.textContent = "Playing…";
+    stepPlay();
+  });
+
+  resetBtn.addEventListener("click", function () {
+    clearTimeout(playTimer);
+    playing = false;
+    playIdx = 0;
+    goBtn.disabled = false;
+    goBtn.textContent = "Go →";
+    cardEls.forEach(function (c) { c.classList.remove("expanded", "active-step"); });
+    highlightLayers([]);
+    setTrack(null);
+    osiDetailEl.textContent = "Select a layer above, or trigger a step in the journey, to see its explanation here.";
+    liveData = null;
+    liveState = "idle";
+    document.getElementById("livePanel").classList.remove("show");
+  });
+
+  // ---------------- Theme toggle ----------------
+  var themeBtn = document.getElementById("themeToggle");
+  var current = null;
+  themeBtn.addEventListener("click", function () {
+    if (current === "dark") {
+      document.documentElement.removeAttribute("data-theme");
+      current = "light";
+      themeBtn.textContent = "Dark mode";
+      document.documentElement.setAttribute("data-theme", "light");
+    } else {
+      document.documentElement.setAttribute("data-theme", "dark");
+      current = "dark";
+      themeBtn.textContent = "Light mode";
+    }
+  });
+
+  // init
+  httpsToggle.checked = true;
+})();
+</script>
+</body>
+</html>
