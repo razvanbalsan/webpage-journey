@@ -818,6 +818,18 @@
     return { value: value, source: source };
   }
 
+  // Mirrors wj.schema.join_present on the Python side: renderFact() already
+  // drops a null/undefined/"" value cleanly, but that only helps if the
+  // string reaching fact() was never built by hand-concatenating optional
+  // parts in the first place -- a bare `undefined + " ms"` is a string, not a
+  // missing value, so it renders as the literal text "undefined". Join the
+  // present parts with sep; return null (not "") when nothing is present, so
+  // it flows straight into fact()'s existing null handling.
+  function joined(parts, sep) {
+    var present = parts.filter(function (p) { return p !== null && p !== undefined && p !== ""; });
+    return present.length ? present.join(sep === undefined ? " " : sep) : null;
+  }
+
   function renderFact(f) {
     if (!f || f.value === null || f.value === undefined || f.value === "") return "";
     return escapeHtml(String(f.value)) +
@@ -837,6 +849,10 @@
     return section && !section.observed ? section.why_not : null;
   }
 
+  function isFiniteNumber(v) {
+    return typeof v === "number" && isFinite(v);
+  }
+
   function importTraceText(text) {
     var parsed;
     try {
@@ -853,6 +869,15 @@
       return { ok: false, error: "This trace is schema version " + major +
                "; this page reads version " + TRACE_SCHEMA_MAJOR +
                ". Re-run trace.py, or open the matching version of this page." };
+    }
+    // renderWaterfall() interpolates timings.total_ms directly into an SVG
+    // aria-label and text node; a non-finite value (a string, in particular)
+    // both defeats the "total <= 0" bail-out (a string compared to 0 goes
+    // through NaN, which is never <= 0) and reaches those sinks unescaped.
+    // Refused here, at the trust boundary, rather than merely escaped later.
+    var timings = parsed && parsed.timings;
+    if (timings && timings.total_ms !== undefined && !isFiniteNumber(timings.total_ms)) {
+      return { ok: false, error: "This trace's timings.total_ms is not a finite number — refusing to import." };
     }
     return { ok: true, trace: parsed };
   }
@@ -902,24 +927,34 @@
 
   function renderFindings() {
     var panel = document.getElementById("findingsPanel");
-    var notes = ((state.trace && state.trace.notes) || []).slice();
+    var notes = (state.trace && state.trace.notes) || [];
+    // An info-severity note (e.g. "no HTTP/3 advertised") fires for most real
+    // hosts, so gating "nothing worth flagging" on ANY note made that message
+    // effectively unreachable. Actionable (warn/critical) and advisory (info)
+    // are judged and shown separately -- mirrors wj.render.render_findings.
     var order = { critical: 0, warn: 1, info: 2 };
-    notes.sort(function (a, b) { return (order[a.severity] || 9) - (order[b.severity] || 9); });
+    var actionable = notes.filter(function (n) { return n.severity === "warn" || n.severity === "critical"; })
+      .sort(function (a, b) { return (order[a.severity] || 9) - (order[b.severity] || 9); });
+    var advisory = notes.filter(function (n) { return n.severity === "info"; });
 
-    if (!notes.length) {
-      panel.innerHTML = "<h3>Findings</h3>" +
-        '<p style="font-size:13px;color:var(--good);margin:0">' +
-        "Nothing worth flagging in this trace.</p>";
-      return;
+    function findingRow(n) {
+      return '<div class="finding">' +
+        '<span class="sev sev-' + escapeHtml(n.severity) + '">' + escapeHtml(n.severity) + "</span>" +
+        '<span class="where">' + escapeHtml(n.section) + "</span>" +
+        "<span>" + escapeHtml(n.text) + "</span></div>";
     }
 
-    panel.innerHTML = "<h3>Findings (" + notes.length + ")</h3>" +
-      notes.map(function (n) {
-        return '<div class="finding">' +
-          '<span class="sev sev-' + escapeHtml(n.severity) + '">' + escapeHtml(n.severity) + "</span>" +
-          '<span class="where">' + escapeHtml(n.section) + "</span>" +
-          "<span>" + escapeHtml(n.text) + "</span></div>";
-      }).join("");
+    var html = "<h3>Findings</h3>";
+    if (!actionable.length) {
+      html += '<p style="font-size:13px;color:var(--good);margin:0">Nothing worth flagging in this trace.</p>';
+    } else {
+      html = "<h3>Findings (" + actionable.length + ")</h3>" + actionable.map(findingRow).join("");
+    }
+    if (advisory.length) {
+      html += '<h3 style="margin-top:12px">Advisory (' + advisory.length + ')</h3>' +
+        advisory.map(findingRow).join("");
+    }
+    panel.innerHTML = html;
   }
 
   function renderWaterfall() {
@@ -928,7 +963,7 @@
     var rows = timings.waterfall || [];
     var total = timings.total_ms || 0;
 
-    if (!rows.length || total <= 0) { panel.innerHTML = ""; return; }
+    if (!rows.length || !isFiniteNumber(total) || total <= 0) { panel.innerHTML = ""; return; }
 
     var rowH = 24, labelW = 90, timeW = 74, barW = 360;
     var height = rows.length * rowH + 34;
@@ -949,8 +984,8 @@
     panel.innerHTML = "<h3>Timing waterfall</h3>" +
       '<div class="waterfall-scroll"><svg class="waterfall-svg" width="' + width +
       '" height="' + height + '" role="img" aria-label="Timing waterfall, total ' +
-      total + ' milliseconds">' + bars +
-      '<text class="total" x="0" y="' + (height - 6) + '">Total ' + total + " ms</text>" +
+      escapeHtml(total) + ' milliseconds">' + bars +
+      '<text class="total" x="0" y="' + (height - 6) + '">Total ' + escapeHtml(total) + " ms</text>" +
       "</svg></div>";
   }
 
@@ -1047,7 +1082,7 @@
           ["Gateway", fact(s.gateway_ip, "measured")],
           ["Gateway MAC", fact(s.gateway_mac, "measured")],
           ["Public address", fact(s.public_ip, "measured")],
-          ["NAT", fact(s.nat ? "yes" : "no", "measured")]
+          ["NAT", fact(s.nat === true ? "yes" : s.nat === false ? "no" : null, "measured")]
         ];
       },
       testYourself: function () {
@@ -1089,15 +1124,29 @@
           rows.push(["Query failed", fact("no answer for: " + failed.join(", ") +
             " — unknown, not confirmed absent", "measured")]);
         }
-        var aRec = (s.records.A || [])[0];
+        var aRec = ((s.records || {}).A || [])[0];
         rows.push(["TTL", fact(aRec ? aRec.ttl + "s" : null, "measured")]);
         rows.push(["Resolver", fact(((s.resolver || {}).servers || []).join(", "), "measured")]);
         rows.push(["DNSSEC", fact(s.dnssec, "measured")]);
         rows.push(["Advertised ALPN", fact(
           failed.indexOf("HTTPS") !== -1 ? null : ((s.alpn_advertised || []).join(", ") || "none published"),
           "measured")]);
-        rows.push(["Lookup time", fact((s.timing_ms || {}).cold + " ms cold, " +
-                                       (s.timing_ms || {}).warm + " ms warm", "measured")]);
+        var timing = s.timing_ms || {};
+        rows.push(["Lookup time", fact(joined([
+          timing.cold != null ? timing.cold + " ms cold" : null,
+          timing.warm != null ? timing.warm + " ms warm" : null
+        ], ", "), "measured")]);
+        if (timing.survey_ms != null) {
+          rows.push(["Full 9-record survey", fact(timing.survey_ms + " ms — not the per-connection lookup cost above", "measured")]);
+        }
+        if ((s.delegation || []).length) {
+          rows.push(["Delegation walk", fact(s.delegation.map(function (hop) {
+            var where = (hop.level || "?") + ": " + (hop.server || "?");
+            if (hop.error) return where + " → " + hop.error;
+            var next = (hop.referral && hop.referral.length) ? hop.referral : (hop.answer || []);
+            return where + " → " + (next.length ? next.join(", ") : "no referral");
+          }).join("  |  "), "measured")]);
+        }
         return rows;
       },
       testYourself: function () {
@@ -1118,7 +1167,7 @@
       phase: "Picking a route",
       title: "Choosing an address",
       simple: "A domain often resolves to several addresses. Your browser races them and uses whichever answers first.",
-      technical: "This is <strong>Happy Eyeballs</strong> (RFC 8305). Given both AAAA and A records, the client starts an IPv6 connection first, then starts an IPv4 attempt a short time later rather than waiting for IPv6 to time out — and uses whichever completes first. It is why a broken IPv6 path costs you milliseconds instead of thirty seconds. When a domain returns several addresses, they are usually <strong>anycast</strong> edges of a CDN: the same address is announced from many locations, and routing decides which one you actually reach. Comparing connect times across the returned addresses tells you whether you are hitting one origin server or a distributed edge.",
+      technical: "Real browsers do this with <strong>Happy Eyeballs</strong> (RFC 8305): given both AAAA and A records, the client starts an IPv6 connection first, then starts an IPv4 attempt a short time later rather than waiting for IPv6 to time out — and uses whichever completes first. It is why a broken IPv6 path costs a browser milliseconds instead of thirty seconds. The measured numbers below are from this tool's own simultaneous connect comparison, not a staggered Happy Eyeballs race — every candidate is started at once, so treat them as a fair connect-time comparison across addresses, not as a demonstration of the RFC 8305 stagger itself. When a domain returns several addresses, they are usually <strong>anycast</strong> edges of a CDN: the same address is announced from many locations, and routing decides which one you actually reach. Comparing connect times across the returned addresses tells you whether you are hitting one origin server or a distributed edge.",
       layers: [ {n:4,w:"primary"}, {n:3,w:"primary"} ],
       pos: 18,
       bind: function () {
@@ -1126,7 +1175,7 @@
         if (!s) return [];
         var rows = (s.candidates || []).map(function (c) {
           return [c.family + " " + c.ip,
-                  fact(c.error ? c.error : c.connect_ms + " ms", "measured")];
+                  fact(c.error || (c.connect_ms != null ? c.connect_ms + " ms" : null), "measured")];
         });
         var winnerParts = [s.winner_family, (s.chosen || {}).ip].filter(function (p) { return p; });
         rows.push(["Winner", fact(winnerParts.length ? winnerParts.join(" ") : null, "measured")]);
@@ -1137,7 +1186,7 @@
                "curl -sS -o /dev/null -w '%{time_connect}s via %{remote_ip}\\n' -4 https://" + host() + "/";
       },
       whatBreaks: [
-        "IPv6 is advertised but unroutable on your network — Happy Eyeballs hides it, so it stays broken and invisible for years.",
+        "IPv6 is advertised but unroutable on your network — a real browser's Happy Eyeballs stagger hides it, so it stays broken and invisible for years.",
         "One anycast edge is unhealthy: some users see failures and others do not, from the same address.",
         "A host publishes only an A record, so IPv6-only clients cannot reach it at all."
       ]
@@ -1189,9 +1238,14 @@
         var s = traceSection("tcp");
         if (!s) return [];
         var k = s.kernel || {};
+        function endpoint(d) {
+          d = d || {};
+          if (d.ip && d.port != null) return d.ip + ":" + d.port;
+          return d.ip || null;
+        }
         return [
-          ["Client", fact((s.local || {}).ip + ":" + (s.local || {}).port, "measured")],
-          ["Server", fact((s.chosen || {}).ip + ":" + (s.chosen || {}).port, "measured")],
+          ["Client", fact(endpoint(s.local), "measured")],
+          ["Server", fact(endpoint(s.chosen), "measured")],
           ["Round-trip time", fact(k.rtt_ms != null ? k.rtt_ms + " ms" : null, "measured")],
           ["Segment size (MSS)", fact(k.mss, "measured")],
           ["Retransmits", fact(k.retransmits, "measured")],
@@ -1292,7 +1346,7 @@
         if (!s) return [];
         var rows = (s.hops || []).map(function (h, i) {
           return ["Hop " + (i + 1) + " · " + h.status,
-                  fact(h.url + " → " + h.location, "measured")];
+                  fact(joined([h.url, h.location], " → "), "measured")];
         });
         if (s.redirect_limit_reached && (s.hops || []).length) {
           // A hop count alone reads as the whole chain — say plainly it was cut short.
@@ -1383,7 +1437,7 @@
           ["Content type", fact(f.content_type, "measured")],
           ["On the wire", fact(f.wire_bytes != null ? f.wire_bytes + " bytes" : null, "measured")],
           ["Decoded", fact(f.decoded_bytes != null ? f.decoded_bytes + " bytes" : null, "measured")],
-          ["Compression", fact(f.encoding ? f.encoding + " " + f.ratio + ":1" : "none", "measured")],
+          ["Compression", fact(f.encoding ? joined([f.encoding, f.ratio != null ? f.ratio + ":1" : null], " ") : "none", "measured")],
           ["Security grade", fact(sec.grade, "measured")],
           ["Missing headers", fact((sec.missing || []).join(", ") || "none", "measured")],
           ["Cookies", fact((sec.cookies || []).map(function (c) {
@@ -1455,12 +1509,17 @@
         var http = traceSection("http");
         var rows = [];
         if (dns) {
-          var aRec = (dns.records.A || [])[0];
+          var aRec = ((dns.records || {}).A || [])[0];
           rows.push(["DNS cached for", fact(aRec ? aRec.ttl + "s" : null, "measured")]);
         }
-        if (tls) rows.push(["Session resumption", fact((tls.resumption || {}).tested ?
-          ((tls.resumption.resumed ? "resumed in " + tls.resumption.handshake_ms + " ms" : "not offered")) :
-          "not tested (run with --deep)", "measured")]);
+        if (tls) {
+          var resumption = tls.resumption || {};
+          var resumptionText = !resumption.tested ? "not tested by this tool" :
+            resumption.resumed ?
+              (resumption.handshake_ms != null ? "resumed in " + resumption.handshake_ms + " ms" : "resumed") :
+              "not offered";
+          rows.push(["Session resumption", fact(resumptionText, "measured")]);
+        }
         if (http) rows.push(["Cache directives", fact((http.cache || {}).directives || "none", "measured")]);
         return rows;
       },
@@ -1739,6 +1798,7 @@
     btn.className = "osi-layer";
     btn.style.setProperty("--layer-color", "var(" + LAYER_COLOR_VARS[layer.n] + ")");
     btn.innerHTML = '<span>L' + layer.n + ' &middot; ' + layer.name + '</span><span class="n">' + layer.proto + '</span>';
+    btn.setAttribute("aria-pressed", "false");
     btn.addEventListener("click", function () {
       showLayerDetail(layer, true);
       setLayerFilter(state.layerFilter === layer.n ? null : layer.n);
@@ -1785,8 +1845,12 @@
     if (n === null) {
       note.textContent = "";
     } else {
+      // A step hidden because it's HTTPS-only (with HTTPS off) is not "shown"
+      // just because the layer filter alone would have included it -- without
+      // this, HTTPS off + an L6 filter could say "Showing the 1 stage(s)"
+      // while zero cards are actually on screen.
       var shown = cardEls.filter(function (c) {
-        return !c.classList.contains("filtered-out");
+        return !c.classList.contains("filtered-out") && !c.classList.contains("hidden-https");
       }).length;
       note.textContent = "Showing the " + shown + " stage(s) where L" + n +
                          " does the work. Click L" + n + " again to show all.";
@@ -2234,10 +2298,12 @@
     }
   } catch (e) {}
 
+  // Prefill only -- do not auto-fire. A ?host= link a user merely clicked
+  // must not itself send an attacker-chosen host to three third parties and
+  // a cross-origin fetch; the user has to press Go.
   var deepLinkHost = new URLSearchParams(window.location.search).get("host");
   if (deepLinkHost) {
     urlInput.value = (httpsOn ? "https://" : "http://") + deepLinkHost;
-    if (LIVE_LOOKUPS_ENABLED) goBtn.click();
   }
 })();
 </script>
