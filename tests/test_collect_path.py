@@ -91,3 +91,48 @@ def test_collect_without_traceroute_explains_itself():
     section = path_collect.collect(make_ctx(has_traceroute=False))
     assert section["observed"] is False
     assert "traceroute not on PATH" in section["why_not"]
+
+
+def test_rtt_is_not_captured_from_a_hostname_that_contains_ms():
+    hops = path_collect.parse_traceroute(
+        " 7  ae1.msw.equinix.com (206.223.123.1)  12.345 ms\n")
+    assert hops[0]["rtt_ms"] == 12.345
+    assert hops[0]["rdns"] == "ae1.msw.equinix.com"
+
+
+def test_rtt_absent_when_the_line_carries_no_timing():
+    hops = path_collect.parse_traceroute(" 7  ae1.msw.equinix.com (206.223.123.1)\n")
+    assert hops[0]["rtt_ms"] is None
+    assert hops[0]["ip"] == "206.223.123.1"
+
+
+def test_cymru_name_refuses_ipv6_rather_than_returning_nonsense():
+    with pytest.raises(ValueError):
+        path_collect.cymru_name("2606:4700:4700::1111")
+
+
+def test_ipv6_target_selects_traceroute6():
+    ctx = make_ctx()
+    ctx.caps.tools = {"traceroute": "/usr/sbin/traceroute",
+                      "traceroute6": "/usr/sbin/traceroute6"}
+    ctx.results["tcp"] = {"observed": True,
+                          "chosen": {"ip": "2606:4700::1111", "family": "ipv6", "port": 443}}
+    seen = {}
+
+    def fake_run(cmd, timeout):
+        seen["cmd"] = cmd
+        return " 1  2606:4700::1  1.234 ms\n"
+
+    path_collect.collect(ctx, run=fake_run,
+                         asn_lookup=lambda ip: {"asn": None, "prefix": None, "country": None})
+    assert seen["cmd"][0] == "traceroute6"
+
+
+def test_ipv6_target_without_traceroute6_says_which_tool_is_missing():
+    ctx = make_ctx()
+    ctx.caps.tools = {"traceroute": "/usr/sbin/traceroute", "traceroute6": None}
+    ctx.results["tcp"] = {"observed": True,
+                          "chosen": {"ip": "2606:4700::1111", "family": "ipv6", "port": 443}}
+    section = path_collect.collect(ctx)
+    assert section["observed"] is False
+    assert "traceroute6" in section["why_not"]

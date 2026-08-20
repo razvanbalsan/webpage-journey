@@ -8,7 +8,11 @@ from wj.schema import observed, unobserved
 HOP_RE = re.compile(r"^\s*(\d+)\s+(.*)$")
 ADDR_RE = re.compile(r"([\w.\-]+)\s+\(([\d.:a-fA-F]+)\)")
 BARE_IP_RE = re.compile(r"^([\d.]+|[0-9a-fA-F:]+)\s")
-RTT_RE = re.compile(r"([\d.]+)\s*ms")
+# The RTT must be a standalone number followed by a standalone "ms" — searching the
+# whole line for /[\d.]+\s*ms/ matches "1.ms" inside a hostname like ae1.msw.example.
+RTT_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s*ms(?![\w])")
+
+IPV6_TOOL = "traceroute6"
 
 
 def parse_traceroute(text):
@@ -47,6 +51,9 @@ def parse_traceroute(text):
 
 
 def cymru_name(ip):
+    """IPv4 only: Cymru's IPv6 origin zone uses a different nibble format."""
+    if ":" in ip:
+        raise ValueError(f"cymru_name is IPv4-only; got {ip}")
     return ".".join(reversed(ip.split("."))) + ".origin.asn.cymru.com"
 
 
@@ -102,14 +109,16 @@ def collect(ctx, run=None, asn_lookup=None):
     if not target_ip:
         return unobserved("no destination address to trace towards")
 
-    if not ctx.caps.has_tool("traceroute"):
-        return unobserved("traceroute not on PATH")
+    is_v6 = ":" in target_ip
+    tool = IPV6_TOOL if is_v6 else "traceroute"
+    if not ctx.caps.has_tool(tool):
+        return unobserved(f"{tool} not on PATH")
 
     run = run or _run_traceroute(ctx)
     asn_lookup = asn_lookup or _dns_asn_lookup(ctx)
 
     budget = ctx.budget_for(20.0)
-    cmd = ["traceroute", "-w", "1", "-q", "1", "-m", "20", target_ip]
+    cmd = [tool, "-w", "1", "-q", "1", "-m", "20", target_ip]
     try:
         out = run(cmd, timeout=budget)
     except Exception as exc:

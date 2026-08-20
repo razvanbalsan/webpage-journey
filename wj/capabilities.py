@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass, field
 
 TOOL_NAMES = (
-    "dig", "traceroute", "tracepath", "openssl", "ip", "ifconfig",
+    "dig", "traceroute", "traceroute6", "tracepath", "openssl", "ip", "ifconfig",
     "route", "arp", "ipconfig", "ethtool", "wdutil", "scutil", "sudo",
 )
 
