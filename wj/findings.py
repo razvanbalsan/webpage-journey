@@ -51,6 +51,13 @@ def _analyse_tls(trace):
         add_note(trace, "warn", "tls",
                  "the presented issuer is not listed in the zone's CAA records")
 
+    dns = trace.get("dns", {})
+    advertised = [p for p in dns.get("alpn_advertised") or [] if p != "http/1.1"]
+    if advertised:
+        add_note(trace, "info", "tls",
+                 "this host advertises " + ", ".join(advertised) +
+                 ", but this tool speaks HTTP/1.1 and negotiated http/1.1")
+
 
 def _analyse_http(trace):
     http = trace.get("http", {})

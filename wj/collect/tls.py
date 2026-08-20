@@ -10,6 +10,12 @@ from wj.schema import observed, unobserved
 
 EXPIRY_WARN_DAYS = 21
 
+# We offer only HTTP/1.1 because that is the only framing wj/collect/http.py
+# writes. Offering h2 would make most servers agree to it and then fail on the
+# HTTP/1.1 text we send. What the host *supports* is measured separately and
+# more reliably from its DNS HTTPS record (dns.alpn_advertised).
+ALPN_PROTOCOLS = ["http/1.1"]
+
 
 def summarise_cert(der, now=None):
     from cryptography import x509
@@ -134,7 +140,7 @@ def collect(ctx):
         return unobserved("no TCP connection to negotiate over")
 
     context = ssl.create_default_context()
-    context.set_alpn_protocols(["h2", "http/1.1"])
+    context.set_alpn_protocols(ALPN_PROTOCOLS)
     sock.settimeout(ctx.budget_for(ctx.timeout))
 
     started = time.perf_counter()

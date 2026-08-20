@@ -5,6 +5,7 @@ import time
 import zlib
 from urllib.parse import urljoin, urlsplit
 
+from wj.collect.tls import ALPN_PROTOCOLS
 from wj.schema import observed, unobserved
 
 MAX_REDIRECTS = 10
@@ -182,7 +183,7 @@ def _open(split, ctx):
     sock = socket.create_connection((split.hostname, port), timeout=ctx.budget_for(ctx.timeout))
     if split.scheme == "https":
         context = ssl.create_default_context()
-        context.set_alpn_protocols(["http/1.1"])
+        context.set_alpn_protocols(ALPN_PROTOCOLS)
         sock = context.wrap_socket(sock, server_hostname=split.hostname)
     return sock
 

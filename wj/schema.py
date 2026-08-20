@@ -118,8 +118,8 @@ def build_osi(trace):
     l3_facts = []
     if local.get("local_ip") and target_ip:
         l3_facts.append(f"{local['local_ip']} → {target_ip}")
-    if local.get("nat"):
-        l3_facts.append(f"NAT: {local.get('local_ip')} appears as {local.get('public_ip')}")
+    if local.get("nat") and local.get("local_ip") and local.get("public_ip"):
+        l3_facts.append(f"NAT: {local['local_ip']} appears as {local['public_ip']}")
     if path.get("observed"):
         l3_facts.append(f"{len(path.get('hops', []))} hops")
         as_path = path.get("asn_path") or []

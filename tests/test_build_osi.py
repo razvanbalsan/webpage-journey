@@ -142,6 +142,18 @@ def test_layer_seven_status_line_never_prints_none_when_protocol_and_status_are_
     assert "None" not in joined
 
 
+def test_nat_true_with_absent_ips_never_fabricates_a_none_fact():
+    # Currently unreachable in practice (wj/collect/local.py only sets nat=True
+    # when both IPs are truthy), but build_osi must not fabricate a fact from
+    # absent values if nat and the IPs ever disagree.
+    trace = full_trace()
+    trace["local"].update(nat=True, local_ip=None, public_ip=None)
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l3"]["facts"])
+    assert "None" not in joined
+    assert "NAT" not in joined
+
+
 def test_all_optional_sub_fields_none_never_prints_the_literal_none():
     trace = full_trace()
     trace["local"].update(link=None, mtu=None, local_ip=None, local_mac=None,
