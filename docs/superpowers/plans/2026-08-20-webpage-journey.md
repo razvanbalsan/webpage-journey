@@ -890,6 +890,13 @@ git commit -m "feat: run context with budget arithmetic and target parsing"
 
   `query(name, rtype)` is the injectable seam: it returns `(records, ad_flag)` where `records` is `list[{"data": str, "ttl": int}]` and `ad_flag` is `bool | None`. It raises `LookupError` when the name does not exist.
 
+  **Amended during implementation (Task 5 review, fix round 1).** The seam returns `None` for
+  `records` when the query *failed* and `[]` only when the record type is genuinely absent
+  (`dns.resolver.NoAnswer`); `collect` stores `[]` for a failed type but names it in an additive
+  `records_failed: list[str]` on the section, so "unknown" and "none published" stay distinct.
+  The AD flag feeding `classify_dnssec` is taken from `A`/`AAAA` only. Every `RECORD_TYPES` key is
+  still present with a list value, so tasks 6, 7, 12 and 18 are unaffected.
+
   The section shape `collect` returns:
 
 ```python
