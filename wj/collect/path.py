@@ -8,9 +8,10 @@ from wj.schema import observed, unobserved
 HOP_RE = re.compile(r"^\s*(\d+)\s+(.*)$")
 ADDR_RE = re.compile(r"([\w.\-]+)\s+\(([\d.:a-fA-F]+)\)")
 BARE_IP_RE = re.compile(r"^([\d.]+|[0-9a-fA-F:]+)\s")
-# The RTT must be a standalone number followed by a standalone "ms" — searching the
-# whole line for /[\d.]+\s*ms/ matches "1.ms" inside a hostname like ae1.msw.example.
-RTT_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s*ms(?![\w])")
+# The RTT is only ever searched for in the part of the line AFTER the address.
+# Searching the whole line lets a hostname fragment like "sw-5ms." or "ae1.msw"
+# masquerade as a timing, which fabricates a measurement out of a router's name.
+RTT_RE = re.compile(r"(?:^|\s)(\d+(?:\.\d+)?)\s*ms(?=\s|$|!)")
 
 IPV6_TOOL = "traceroute6"
 
@@ -37,13 +38,15 @@ def parse_traceroute(text):
             rdns, ip = addr.group(1), addr.group(2)
             if rdns == ip:
                 rdns = None
+            tail = rest[addr.end():]
         else:
             bare = BARE_IP_RE.match(rest)
             if not bare:
                 continue
             ip, rdns = bare.group(1), None
+            tail = rest[bare.end():]
 
-        rtt = RTT_RE.search(rest)
+        rtt = RTT_RE.search(tail)
         hops.append({"ttl": ttl, "ip": ip, "rdns": rdns,
                      "rtt_ms": float(rtt.group(1)) if rtt else None})
 

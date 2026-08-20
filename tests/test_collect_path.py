@@ -106,6 +106,23 @@ def test_rtt_absent_when_the_line_carries_no_timing():
     assert hops[0]["ip"] == "206.223.123.1"
 
 
+def test_rtt_is_not_captured_from_a_hyphenated_hostname_segment():
+    hops = path_collect.parse_traceroute(
+        " 7  sw-5ms.example.com (1.2.3.4)  8.234 ms  8.100 ms  8.050 ms\n")
+    assert hops[0]["rtt_ms"] == 8.234
+    assert hops[0]["rdns"] == "sw-5ms.example.com"
+
+
+def test_rtt_search_ignores_the_hostname_entirely():
+    # Every one of these hostnames contains a digit+ms fragment with a different
+    # delimiter. None of them is a timing; the timing is always the trailing token.
+    for name in ("ae1.msw.example.com", "sw-5ms.example.com",
+                 "x9ms-core.example.com", "p3.ms1.example.com"):
+        line = f" 4  {name} (203.0.113.7)  7.500 ms\n"
+        hops = path_collect.parse_traceroute(line)
+        assert hops[0]["rtt_ms"] == 7.500, name
+
+
 def test_cymru_name_refuses_ipv6_rather_than_returning_nonsense():
     with pytest.raises(ValueError):
         path_collect.cymru_name("2606:4700:4700::1111")
