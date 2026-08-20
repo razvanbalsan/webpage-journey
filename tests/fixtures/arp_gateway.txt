@@ -1,0 +1,1 @@
+? (192.168.1.1) at 11:22:33:44:55:66 on en0 ifscope [ethernet]
