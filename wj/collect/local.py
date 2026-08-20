@@ -104,11 +104,18 @@ def parse_ipconfig_getpacket(text):
 
 
 def is_private(ip):
+    """True when the address is not globally routable.
+
+    Covers RFC 1918, loopback, link-local, IPv6 ULA, and — the case that
+    matters — CGNAT (100.64.0.0/10), for which the stdlib's own is_private()
+    returns False. A host behind carrier-grade NAT is NAT'd, and reporting
+    otherwise would be a wrong answer rather than an absent one.
+    """
     try:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    return addr.is_private or addr.is_loopback
+    return not addr.is_global
 
 
 def _runner():
