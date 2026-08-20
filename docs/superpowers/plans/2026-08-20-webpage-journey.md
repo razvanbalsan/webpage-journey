@@ -2738,6 +2738,14 @@ git commit -m "feat: path collector with traceroute parsing and per-hop ASN look
   - `parse_ip_neigh(text) -> str | None`
   - `parse_ipconfig_getpacket(text) -> dict` → `{"server", "lease_seconds", "dns"}`
   - `is_private(ip: str) -> bool`
+    **Amended during implementation (Task 10).** Implemented as `not addr.is_global`, not as
+    `addr.is_private or addr.is_loopback`. The stdlib's `is_private` returns False for CGNAT
+    (100.64.0.0/10), so the draft reported `nat=False` for a host that is emphatically NAT'd — live on
+    the development machine, whose DHCP-offered resolvers sit in that range. Asking "is this globally
+    routable" covers RFC 1918, loopback, link-local, ULA and CGNAT in one predicate, and is the right
+    question for both callers: the NAT determination here, and `redact.py`'s choice of which hops
+    identify the operator. A side-by-side check of both predicates across fifteen address classes on
+    Python 3.14 found CGNAT the only behavioural change — nothing public became private.
   - `collect(ctx, run=None, public_ip=None) -> dict`
 
   Section shape:
