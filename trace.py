@@ -16,8 +16,7 @@ def build_parser():
     p = argparse.ArgumentParser(
         prog="trace.py",
         description="Trace a webpage request end to end, with real data, mapped onto the OSI model.",
-        epilog="Trace only hosts you are authorised to probe. --deep sends extra "
-               "requests that constitute mild active scanning.",
+        epilog="Trace only hosts you are authorised to probe.",
     )
     p.add_argument("target", nargs="?", help="Domain or URL, e.g. example.com")
     p.add_argument("--port", type=int, default=None, help="Override the port")
@@ -26,13 +25,7 @@ def build_parser():
     p.add_argument("--budget", type=float, default=25.0, help="Total wall-clock cap (default 25)")
     p.add_argument("--json", dest="json_path", metavar="PATH",
                    help="Export the trace document; '-' writes to stdout")
-    p.add_argument("--deep", action="store_true",
-                   help="Extra probes: TLS downgrade, session resumption, 304 replay")
-    p.add_argument("--privileged", action="store_true",
-                   help="Allow sudo for traceroute, path MTU, and Wi-Fi detail")
     p.add_argument("--no-path", action="store_true", help="Skip traceroute entirely")
-    p.add_argument("--geo-hops", action="store_true",
-                   help="Geolocate every hop, not only the destination")
     redaction = p.add_mutually_exclusive_group()
     redaction.add_argument("--redact", dest="redact", action="store_true", default=True,
                            help="Redact MAC / local IP / public IP in exports (default)")
@@ -43,8 +36,6 @@ def build_parser():
                          const="auto", default="auto", help="Install missing libraries (default)")
     install.add_argument("--offline", dest="install_mode", action="store_const",
                          const="offline", help="Never install anything")
-    p.add_argument("--insecure", action="store_true",
-                   help="Continue past certificate validation failure and still report the cert")
     p.add_argument("--osi", action="store_true",
                    help="Print the OSI reference table alone and exit (no trace)")
     p.add_argument("--version", action="version", version=f"trace.py {__version__}")
@@ -77,8 +68,7 @@ def main(argv=None):
 
     ctx = Context(host=host, scheme=scheme, port=port, path=path,
                   timeout=args.timeout, deadline=time.monotonic() + args.budget,
-                  caps=caps, deep=args.deep, privileged=args.privileged,
-                  no_path=args.no_path, geo_hops=args.geo_hops, results={})
+                  caps=caps, no_path=args.no_path, results={})
 
     with console.status(f"Tracing {scheme}://{host}:{port}{path} …"):
         trace = run.orchestrate(ctx)

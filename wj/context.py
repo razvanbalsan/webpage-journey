@@ -14,10 +14,7 @@ class Context:
     timeout: float
     deadline: float
     caps: object
-    deep: bool = False
-    privileged: bool = False
     no_path: bool = False
-    geo_hops: bool = False
     results: dict = field(default_factory=dict)
 
     def remaining(self, now=None):

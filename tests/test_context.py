@@ -7,8 +7,8 @@ from wj.context import Context, parse_target
 def make_ctx(deadline):
     caps = capabilities.Capabilities(libs={}, tools={}, privileged=False, can_sudo=False)
     return Context(host="example.com", scheme="https", port=443, path="/",
-                   timeout=8.0, deadline=deadline, caps=caps, deep=False,
-                   privileged=False, no_path=False, geo_hops=False, results={})
+                   timeout=8.0, deadline=deadline, caps=caps,
+                   no_path=False, results={})
 
 
 def test_remaining_counts_down_to_the_deadline():

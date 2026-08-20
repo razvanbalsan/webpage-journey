@@ -34,6 +34,11 @@ Exports are redacted by default: MAC addresses, your local IP, your public IP, a
 private traceroute hops are replaced with a marker the page renders as
 "redacted at export". Use `--no-redact` to keep them.
 
+Every run also contacts `https://ipwho.is/` once, unauthenticated, to learn your
+public IP for the NAT determination in the `local` section — this happens even if
+you never export anything, and even with `--no-redact` off. There is no flag to
+disable it.
+
 ## What this tool does not do
 
 `trace.py` speaks only `http/1.1`. It offers just that one protocol over ALPN during the
@@ -56,15 +61,12 @@ page just now) or **illustrative** (a teaching example).
 | Flag | What it does |
 |---|---|
 | `--json PATH` | Export the trace document (`-` writes to stdout) |
-| `--deep` | Extra probes: TLS downgrade, session resumption, 304 replay |
-| `--privileged` | Allow sudo for traceroute, path MTU, and Wi-Fi detail |
 | `--no-path` | Skip traceroute |
 | `--no-redact` | Keep identifying detail in the export |
 | `--budget N` | Total wall-clock cap in seconds (default 25) |
 | `--osi` | Print the OSI reference table alone |
 
-`--deep` sends extra requests that constitute mild active scanning. Trace only hosts you
-are authorised to probe.
+Trace only hosts you are authorised to probe.
 
 ## Tests
 
