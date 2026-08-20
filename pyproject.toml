@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "webpage-journey"
+version = "0.1.0"
+description = "Trace a webpage request end to end and map it onto the OSI model."
+requires-python = ">=3.13"
+dependencies = [
+    "rich",
+    "dnspython",
+    "cryptography>=42.0",
+]
+
+[project.scripts]
+webpage-journey = "wj.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["wj", "wj.collect"]
+exclude = ["tests", "tests.*", "docs", "docs.*"]
