@@ -110,3 +110,88 @@ def test_render_never_prints_the_literal_none_for_absent_optional_values():
     trace["http"]["cdn"] = None
     out = capture(render.render_trace, trace)
     assert "None" not in out
+
+
+def test_http_status_row_never_fabricates_a_status_code():
+    trace = full_trace()
+    trace["http"]["final"]["status"] = None
+    trace["http"]["final"]["protocol"] = None
+    out = capture(render.render_http, trace)
+    assert "None" not in out
+    assert " 0" not in out
+    assert "no status line" in out
+
+
+def test_render_dns_omits_timing_parenthetical_when_absent():
+    trace = full_trace()
+    trace["dns"]["timing_ms"] = {"cold": None, "warm": None}
+    out = capture(render.render_dns, trace)
+    assert "None" not in out
+    assert "ms cold" not in out
+    assert "ms warm" not in out
+
+
+def test_render_dns_resolver_footer_builds_from_present_parts():
+    trace = full_trace()
+    trace["dns"]["resolver"] = {"servers": None, "source": None}
+    trace["dns"]["dnssec"] = None
+    out = capture(render.render_dns, trace)
+    assert "None" not in out
+    assert "resolved via unknown" in out
+
+
+def test_render_tcp_client_server_line_guards_missing_addresses():
+    trace = full_trace()
+    trace["tcp"]["local"] = None
+    trace["tcp"]["chosen"] = None
+    trace["tcp"]["winner_family"] = None
+    out = capture(render.render_tcp, trace)
+    assert "None" not in out
+
+
+def test_render_tls_handshake_row_guards_missing_duration():
+    trace = full_trace()
+    trace["tls"]["handshake_ms"] = None
+    out = capture(render.render_tls, trace)
+    assert "None" not in out
+
+
+def test_render_tls_cert_row_shows_marker_when_no_fields_parsed():
+    trace = full_trace()
+    trace["tls"]["chain"] = [{"subject_cn": None, "issuer_cn": None,
+                              "key": None, "days_left": None, "sans": None}]
+    out = capture(render.render_tls, trace)
+    assert "None" not in out
+    assert "Cert 0" in out
+    assert "no fields parsed" in out
+
+
+def test_render_trace_never_prints_none_with_every_optional_subfield_absent():
+    # The standing guard: every optional sub-field set to None at once, across
+    # every section, with each section still observed. No literal "None" may
+    # appear anywhere in the rendered output.
+    trace = full_trace()
+    # nat=False here (not None) matches the real collector's own invariant:
+    # nat is computed as bool(local_ip and public_ip and ...), so a trace can
+    # never carry nat=True alongside an absent local_ip/public_ip.
+    trace["local"].update(link=None, mtu=None, local_ip=None, local_mac=None,
+                          gateway_mac=None, public_ip=None, nat=False)
+    trace["dns"].update(dnssec=None, delegation=None, alpn_advertised=None,
+                        ech=None, timing_ms=None)
+    trace["dns"]["resolver"] = {"servers": None, "source": None}
+    trace["tcp"].update(winner_family=None, local=None, chosen=None,
+                        kernel={"rtt_ms": None, "mss": None,
+                                "retransmits": None, "source": None})
+    trace["tls"].update(version=None, cipher=None, alpn=None, handshake_ms=None,
+                        chain=[{"subject_cn": None, "issuer_cn": None, "key": None,
+                                "days_left": None, "sans": None}],
+                        trust_root=None, resumption=None)
+    trace["http"]["final"].update(protocol=None, status=None, reason=None,
+                                  ttfb_ms=None, total_ms=None, encoding=None,
+                                  ratio=None, content_type=None)
+    trace["http"].update(cache={"state": None, "age": None, "header": None,
+                                "directives": None}, cdn=None)
+    trace["path"].update(hops=[], asn_path=None, path_mtu=None)
+    trace["osi"] = schema.build_osi(trace)
+    out = capture(render.render_trace, trace)
+    assert "None" not in out

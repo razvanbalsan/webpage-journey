@@ -119,9 +119,14 @@ def render_dns(console, trace):
     if not section.get("observed"):
         return _unobserved_panel(console, section, "2 · DNS resolution", (7, 4, 3), "blue")
 
-    tree = Tree(f"[bold]{trace['target']['host']}[/bold]  "
-                f"[dim]({(section.get('timing_ms') or {}).get('cold')} ms cold, "
-                f"{(section.get('timing_ms') or {}).get('warm')} ms warm)[/dim]")
+    timing = section.get("timing_ms") or {}
+    timing_parts = []
+    if timing.get("cold") is not None:
+        timing_parts.append(f"{timing['cold']} ms cold")
+    if timing.get("warm") is not None:
+        timing_parts.append(f"{timing['warm']} ms warm")
+    timing_text = f"  [dim]({', '.join(timing_parts)})[/dim]" if timing_parts else ""
+    tree = Tree(f"[bold]{trace['target']['host']}[/bold]{timing_text}")
     for rtype, records in (section.get("records") or {}).items():
         if not records:
             continue
@@ -138,8 +143,12 @@ def render_dns(console, trace):
         tree.add(f"[red]query failed — no answer for: {', '.join(failed)}[/red]")
 
     resolver = section.get("resolver") or {}
-    tree.add(f"[dim]resolved via {', '.join(resolver.get('servers') or ['unknown'])} "
-             f"({resolver.get('source')}) · DNSSEC {section.get('dnssec')}[/dim]")
+    footer = f"resolved via {', '.join(resolver.get('servers') or ['unknown'])}"
+    if resolver.get("source"):
+        footer += f" ({resolver['source']})"
+    if section.get("dnssec"):
+        footer += f" · DNSSEC {section['dnssec']}"
+    tree.add(f"[dim]{footer}[/dim]")
     for hop in section.get("delegation") or []:
         tree.add(f"[dim]{hop.get('level')}: {hop.get('server')} → "
                  f"{', '.join(hop.get('referral') or hop.get('answer') or [])}[/dim]")
@@ -156,14 +165,21 @@ def render_tcp(console, trace):
     local = section.get("local") or {}
     kernel = section.get("kernel") or {}
 
+    def _endpoint(d):
+        ip, port = d.get("ip"), d.get("port")
+        if ip and port is not None:
+            return f"{ip}:{port}"
+        return ip or "unknown"
+
     text = Text()
     text.append("Client  ")
-    text.append(f"{local.get('ip')}:{local.get('port')}", style="bold")
+    text.append(_endpoint(local), style="bold")
     text.append("  →  Server  ")
-    text.append(f"{chosen.get('ip')}:{chosen.get('port')}\n", style="bold")
+    text.append(f"{_endpoint(chosen)}\n", style="bold")
     text.append("        └─ ephemeral port your OS picked\n", style="dim")
     text.append("                              └─ well-known port for this service\n", style="dim")
-    text.append(f"\n{section.get('winner_family')} won the connection race", style="dim")
+    if section.get("winner_family"):
+        text.append(f"\n{section['winner_family']} won the connection race", style="dim")
 
     rows = [(f"{c['family']}  {c['ip']}",
              f"{c['connect_ms']} ms" if c.get("connect_ms") is not None else c.get("error"))
@@ -199,7 +215,8 @@ def render_tls(console, trace):
         ("Protocol", section.get("version")),
         ("Cipher", section.get("cipher")),
         ("ALPN", section.get("alpn")),
-        ("Handshake", f"{section.get('handshake_ms')} ms"),
+        ("Handshake", f"{section.get('handshake_ms')} ms"
+                      if section.get("handshake_ms") is not None else None),
         ("Trusted via", section.get("trust_root")),
         ("CAA", {True: "issuer is authorised", False: "issuer is NOT listed",
                  None: "no comparable CAA record"}[section.get("caa_match")]),
@@ -211,7 +228,11 @@ def render_tls(console, trace):
         key_text = f"{key.get('type')}{key.get('bits')}" if key.get("type") else None
         days_left = cert.get("days_left")
         days_text = f"{days_left} days left" if days_left is not None else None
-        rows.append((f"Cert {i}", " · ".join(p for p in (names, key_text, days_text) if p)))
+        detail = " · ".join(p for p in (names, key_text, days_text) if p)
+        # A chain entry with every field unparsed would otherwise vanish from the
+        # table (an empty string is one of _kv_table's drop conditions), leaving no
+        # trace that a certificate sits at this position at all.
+        rows.append((f"Cert {i}", detail or "[dim]no fields parsed[/dim]"))
         if i == 0 and cert.get("sans"):
             rows.append(("  also valid for", ", ".join(cert["sans"][:6])))
 
@@ -247,8 +268,15 @@ def render_http(console, trace):
         return _unobserved_panel(console, section, "6 · HTTP request & response", (7,), "blue")
 
     final = section.get("final") or {}
-    status = final.get("status") or 0
-    colour = "green" if 200 <= status < 300 else "yellow" if status < 400 else "red"
+    status = final.get("status")
+    protocol = final.get("protocol")
+    if status is None:
+        # A malformed or absent status line is not a measured status of 0 — say so
+        # plainly rather than inventing a code and colouring it like a real error.
+        status_text = "[dim]no status line in the response[/dim]"
+    else:
+        colour = "green" if 200 <= status < 300 else "yellow" if status < 400 else "red"
+        status_text = f"[{colour} bold]{' '.join(p for p in (protocol, str(status)) if p)}[/{colour} bold]"
 
     rows = []
     for hop in section.get("hops") or []:
@@ -269,7 +297,7 @@ def render_http(console, trace):
     cache_value = " · ".join(cache_parts) if cache_parts else None
 
     rows += [
-        ("Status", f"[{colour} bold]{final.get('protocol')} {status}[/{colour} bold]"),
+        ("Status", status_text),
         ("URL", final.get("url")),
         ("TTFB", f"{final.get('ttfb_ms')} ms" if final.get("ttfb_ms") is not None else None),
         ("Total", f"{final.get('total_ms')} ms" if final.get("total_ms") is not None else None),
