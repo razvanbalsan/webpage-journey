@@ -107,7 +107,8 @@
       "observed": true,
       "facts": [
         "TLS session established",
-        "2 request(s) over this connection"
+        "1 request over this connection",
+        "1 redirect(s), each on a new connection"
       ],
       "why_not": null,
       "test_command": null
@@ -117,7 +118,7 @@
       "facts": [
         "TLSv1.3 \u00b7 TLS_AES_128_GCM_SHA256",
         "ALPN http/1.1",
-        "gzip: 14000 \u2192 61000 bytes (4.36:1)",
+        "gzip: 14000 bytes \u2192 61000 bytes (4.36:1)",
         "text/html"
       ],
       "why_not": null,
@@ -301,7 +302,8 @@
     "chain": [
       {
         "subject_cn": "plain.example.net",
-        "issuer_cn": "DigiCert Global G2",
+        "issuer_cn": "DigiCert Global G2 TLS RSA SHA256 2020 CA1",
+        "issuer_org": "DigiCert Inc",
         "not_before": "2026-06-01T00:00:00+00:00",
         "not_after": "2026-08-30T00:00:00+00:00",
         "days_left": 10,
@@ -316,13 +318,14 @@
         ],
         "scts": 2,
         "ocsp": [
-          "http://r3.o.lencr.org"
+          "http://ocsp.digicert.com"
         ],
         "is_ca": false
       },
       {
-        "subject_cn": "DigiCert Global G2",
+        "subject_cn": "DigiCert Global G2 TLS RSA SHA256 2020 CA1",
         "issuer_cn": "DigiCert Global Root G2",
+        "issuer_org": null,
         "not_before": "2024-03-13T00:00:00+00:00",
         "not_after": "2027-03-13T00:00:00+00:00",
         "days_left": 205,
@@ -334,12 +337,12 @@
         "sans": [],
         "scts": 0,
         "ocsp": [
-          "http://x1.i.lencr.org/"
+          "http://ocsp.digicert.com"
         ],
         "is_ca": true
       }
     ],
-    "trust_root": "DigiCert Global G2",
+    "trust_root": "DigiCert Global G2 TLS RSA SHA256 2020 CA1",
     "verified": true,
     "caa_match": false,
     "resumption": {
@@ -428,7 +431,7 @@
         "rdns": "router.lan",
         "rtt_ms": 1.2,
         "asn": null,
-        "as_name": null
+        "prefix": null
       },
       {
         "ttl": 2,
@@ -436,7 +439,7 @@
         "rdns": null,
         "rtt_ms": null,
         "asn": null,
-        "as_name": null
+        "prefix": null
       },
       {
         "ttl": 3,
@@ -444,7 +447,7 @@
         "rdns": "ae-1.border.example.net",
         "rtt_ms": 14.5,
         "asn": 8708,
-        "as_name": "203.0.113.0/24"
+        "prefix": "203.0.113.0/24"
       },
       {
         "ttl": 4,
@@ -452,7 +455,7 @@
         "rdns": null,
         "rtt_ms": 15.0,
         "asn": 13335,
-        "as_name": "104.16.0.0/12"
+        "prefix": "104.16.0.0/12"
       }
     ],
     "asn_path": [

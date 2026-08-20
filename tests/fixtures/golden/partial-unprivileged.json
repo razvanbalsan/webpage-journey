@@ -89,7 +89,8 @@
       "observed": true,
       "facts": [
         "TLS session established",
-        "2 request(s) over this connection"
+        "1 request over this connection",
+        "1 redirect(s), each on a new connection"
       ],
       "why_not": null,
       "test_command": null
@@ -99,7 +100,7 @@
       "facts": [
         "TLSv1.3 \u00b7 TLS_AES_128_GCM_SHA256",
         "ALPN http/1.1",
-        "gzip: 14000 \u2192 61000 bytes (4.36:1)",
+        "gzip: 14000 bytes \u2192 61000 bytes (4.36:1)",
         "text/html"
       ],
       "why_not": null,
@@ -261,7 +262,8 @@
     "chain": [
       {
         "subject_cn": "example.com",
-        "issuer_cn": "R3 (letsencrypt.org)",
+        "issuer_cn": "R11",
+        "issuer_org": "Let's Encrypt",
         "not_before": "2026-06-01T00:00:00+00:00",
         "not_after": "2026-08-30T00:00:00+00:00",
         "days_left": 10,
@@ -276,13 +278,14 @@
         ],
         "scts": 2,
         "ocsp": [
-          "http://r3.o.lencr.org"
+          "http://r11.o.lencr.org"
         ],
         "is_ca": false
       },
       {
-        "subject_cn": "R3 (letsencrypt.org)",
+        "subject_cn": "R11",
         "issuer_cn": "ISRG Root X1",
+        "issuer_org": null,
         "not_before": "2024-03-13T00:00:00+00:00",
         "not_after": "2027-03-13T00:00:00+00:00",
         "days_left": 205,
@@ -299,9 +302,9 @@
         "is_ca": true
       }
     ],
-    "trust_root": "R3 (letsencrypt.org)",
+    "trust_root": "R11",
     "verified": true,
-    "caa_match": true,
+    "caa_match": null,
     "resumption": {
       "tested": false
     },

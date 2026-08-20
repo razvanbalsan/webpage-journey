@@ -28,7 +28,7 @@
     },
     "installed_during_run": []
   },
-  "redacted": false,
+  "redacted": true,
   "timings": {
     "waterfall": [
       {
@@ -73,18 +73,18 @@
     "l2": {
       "observed": true,
       "facts": [
-        "your MAC aa:bb:cc:dd:ee:ff",
-        "\u2192 gateway MAC 11:22:33:44:55:66 (192.168.1.1)",
+        "your MAC [redacted at export]",
+        "\u2192 gateway MAC [redacted at export] ([redacted at export])",
         "every frame to this server is addressed to your router, not to the server"
       ],
       "why_not": null,
-      "test_command": "arp -n 192.168.1.1"
+      "test_command": "arp -n [redacted at export]"
     },
     "l3": {
       "observed": true,
       "facts": [
-        "192.168.1.23 \u2192 104.16.132.229",
-        "NAT: 192.168.1.23 appears as 81.180.20.7",
+        "[redacted at export] \u2192 104.16.132.229",
+        "NAT: [redacted at export] appears as [redacted at export]",
         "4 hops",
         "AS8708 \u2192 AS13335"
       ],
@@ -158,18 +158,18 @@
     "interface": "en0",
     "link": "active",
     "mtu": 1500,
-    "local_ip": "192.168.1.23",
-    "local_mac": "aa:bb:cc:dd:ee:ff",
-    "gateway_ip": "192.168.1.1",
-    "gateway_mac": "11:22:33:44:55:66",
+    "local_ip": "[redacted at export]",
+    "local_mac": "[redacted at export]",
+    "gateway_ip": "[redacted at export]",
+    "gateway_mac": "[redacted at export]",
     "dhcp": {
-      "server": "192.168.1.1",
+      "server": "[redacted at export]",
       "lease_seconds": 86400,
       "dns": [
-        "192.168.1.1"
+        "[redacted at export]"
       ]
     },
-    "public_ip": "81.180.20.7",
+    "public_ip": "[redacted at export]",
     "nat": true
   },
   "dns": {
@@ -276,7 +276,7 @@
     },
     "winner_family": "ipv4",
     "local": {
-      "ip": "192.168.1.23",
+      "ip": "[redacted at export]",
       "port": 54213
     },
     "kernel": {
@@ -421,8 +421,8 @@
     "hops": [
       {
         "ttl": 1,
-        "ip": "192.168.1.1",
-        "rdns": "router.lan",
+        "ip": "[redacted at export]",
+        "rdns": "[redacted at export]",
         "rtt_ms": 1.2,
         "asn": null,
         "prefix": null
@@ -437,8 +437,8 @@
       },
       {
         "ttl": 3,
-        "ip": "203.0.113.9",
-        "rdns": "ae-1.border.example.net",
+        "ip": "[redacted at export]",
+        "rdns": "[redacted at export]",
         "rtt_ms": 14.5,
         "asn": 8708,
         "prefix": "203.0.113.0/24"

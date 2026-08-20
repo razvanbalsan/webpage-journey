@@ -3,7 +3,8 @@
 import json
 from pathlib import Path
 
-from wj import capabilities, schema
+from wj import capabilities, redact, schema
+from wj.collect import tls as tls_collect
 from wj.context import Context
 from wj.run import orchestrate
 
@@ -66,35 +67,38 @@ def collectors(cdn=True, with_path=True, with_local=True):
         # intermediate, matching what -showcerts / get_verified_chain() actually
         # return, so trust_root (computed from chain[-1]) is populated for real.
         #
-        # caa_match is derived by hand here (the fake collector doesn't call
-        # caa_allows()), so it must agree with what that function actually
-        # returns for this chain's issuer_cn against the CAA record below
-        # ('0 issue "letsencrypt.org"'). A bare CA code like "R3" does NOT
-        # satisfy caa_allows("R3") — verified by calling it directly — so the
-        # healthy fixtures use an issuer_cn that genuinely contains the CAA
-        # domain, and plain-host.json deliberately uses a mismatched issuer
-        # to demonstrate the resulting warn note.
+        # issuer_cn is a REAL bare CA code (verified live against letsencrypt.org's
+        # own certificate on 2026-08-20: its issuer CN is a bare code like this,
+        # never the CAA domain spelled out in the CN itself — the earlier
+        # "R3 (letsencrypt.org)" fixture routed around C3 instead of exposing it,
+        # per I8). caa_match is computed by calling the REAL caa_allows() below
+        # (not hand-derived) so this fixture cannot drift from what the function
+        # actually returns — see test_golden.py's fixture-fidelity test.
         if cdn:
-            issuer_cn, intermediate_issuer_cn = "R3 (letsencrypt.org)", "ISRG Root X1"
-            caa_match = True
+            issuer_cn, issuer_org = "R11", "Let's Encrypt"
+            intermediate_issuer_cn = "ISRG Root X1"
+            leaf_ocsp, intermediate_ocsp = ["http://r11.o.lencr.org"], ["http://x1.i.lencr.org/"]
         else:
-            issuer_cn, intermediate_issuer_cn = "DigiCert Global G2", "DigiCert Global Root G2"
-            caa_match = False
+            issuer_cn, issuer_org = "DigiCert Global G2 TLS RSA SHA256 2020 CA1", "DigiCert Inc"
+            intermediate_issuer_cn = "DigiCert Global Root G2"
+            leaf_ocsp, intermediate_ocsp = ["http://ocsp.digicert.com"], ["http://ocsp.digicert.com"]
+        caa_records = [{"data": '0 issue "letsencrypt.org"', "ttl": 3600}]
+        caa_match = tls_collect.caa_allows(caa_records, issuer_cn, issuer_org)
         return schema.observed(
             version="TLSv1.3", cipher="TLS_AES_128_GCM_SHA256",
             alpn="http/1.1", handshake_ms=38.2,
-            chain=[{"subject_cn": ctx.host, "issuer_cn": issuer_cn,
+            chain=[{"subject_cn": ctx.host, "issuer_cn": issuer_cn, "issuer_org": issuer_org,
                     "not_before": "2026-06-01T00:00:00+00:00",
                     "not_after": "2026-08-30T00:00:00+00:00", "days_left": 10,
                     "key": {"type": "EC", "bits": 256}, "sig_algo": "ecdsa-with-SHA256",
                     "sans": [ctx.host, f"www.{ctx.host}"], "scts": 2,
-                    "ocsp": ["http://r3.o.lencr.org"], "is_ca": False},
-                   {"subject_cn": issuer_cn, "issuer_cn": intermediate_issuer_cn,
+                    "ocsp": leaf_ocsp, "is_ca": False},
+                   {"subject_cn": issuer_cn, "issuer_cn": intermediate_issuer_cn, "issuer_org": None,
                     "not_before": "2024-03-13T00:00:00+00:00",
                     "not_after": "2027-03-13T00:00:00+00:00", "days_left": 205,
                     "key": {"type": "RSA", "bits": 2048}, "sig_algo": "sha256WithRSAEncryption",
                     "sans": [], "scts": 0,
-                    "ocsp": ["http://x1.i.lencr.org/"], "is_ca": True}],
+                    "ocsp": intermediate_ocsp, "is_ca": True}],
             trust_root=issuer_cn, verified=True, caa_match=caa_match,
             resumption={"tested": False}, legacy_versions_accepted=[])
 
@@ -149,14 +153,17 @@ def collectors(cdn=True, with_path=True, with_local=True):
             return schema.unobserved("traceroute not on PATH")
         return schema.observed(
             source="traceroute",
+            # "prefix" (not "as_name" — I3): Cymru's TXT answer is
+            # "AS | BGP Prefix | CC | Registry | Allocated"; this field is the
+            # announced BGP prefix, not the AS's name.
             hops=[{"ttl": 1, "ip": "192.168.1.1", "rdns": "router.lan",
-                   "rtt_ms": 1.2, "asn": None, "as_name": None},
+                   "rtt_ms": 1.2, "asn": None, "prefix": None},
                   {"ttl": 2, "ip": None, "rdns": None, "rtt_ms": None,
-                   "asn": None, "as_name": None},
+                   "asn": None, "prefix": None},
                   {"ttl": 3, "ip": "203.0.113.9", "rdns": "ae-1.border.example.net",
-                   "rtt_ms": 14.5, "asn": 8708, "as_name": "203.0.113.0/24"},
+                   "rtt_ms": 14.5, "asn": 8708, "prefix": "203.0.113.0/24"},
                   {"ttl": 4, "ip": "104.16.132.229", "rdns": None,
-                   "rtt_ms": 15.0, "asn": 13335, "as_name": "104.16.0.0/12"}],
+                   "rtt_ms": 15.0, "asn": 13335, "prefix": "104.16.0.0/12"}],
             asn_path=[8708, 13335], path_mtu=None)
 
     return {"local": local, "dns": dns, "tcp": tcp, "tls": tls,
@@ -171,13 +178,26 @@ def write(name, ctx, collectors_map):
     OUT.mkdir(exist_ok=True)
     (OUT / name).write_text(json.dumps(trace, indent=2, default=str) + "\n")
     print(f"wrote {name}")
+    return trace
+
+
+def write_redacted(name, trace):
+    # I5: no golden fixture exercised the page's redaction-rendering path at
+    # all -- every one carried "redacted": false. Produced by running the real
+    # redact.redact_trace() over an already-written fixture, never by hand.
+    redacted = redact.redact_trace(trace)
+    problems = schema.validate(redacted)
+    assert not problems, problems
+    (OUT / name).write_text(json.dumps(redacted, indent=2, default=str) + "\n")
+    print(f"wrote {name}")
 
 
 if __name__ == "__main__":
     tools = {"traceroute": "/usr/sbin/traceroute", "route": "/sbin/route",
              "ifconfig": "/sbin/ifconfig", "arp": "/usr/sbin/arp"}
-    write("cdn-host.json", ctx_for("example.com", tools), collectors())
+    cdn_trace = write("cdn-host.json", ctx_for("example.com", tools), collectors())
     write("plain-host.json", ctx_for("plain.example.net", tools),
           collectors(cdn=False))
     write("partial-unprivileged.json", ctx_for("example.com", {}),
           collectors(with_path=False, with_local=False))
+    write_redacted("cdn-host-redacted.json", cdn_trace)
