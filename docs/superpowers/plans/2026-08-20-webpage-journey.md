@@ -1899,6 +1899,19 @@ git commit -m "feat: TLS collector with chain parsing, ALPN and CAA cross-check"
 
   `fetch(url, path, sock)` is the injectable seam returning the `parse_response` dict plus `{"ttfb_ms", "total_ms", "wire_bytes"}`.
 
+  **Amended during implementation (Tasks 7-8 reviews).** Five corrections to the draft below:
+  (1) the socket fallback `tls.get("_socket") or tcp.get("_socket")` is unsafe — `wrap_socket()`
+  detaches the underlying fd before the handshake and closes it on failure, so after a failed
+  handshake the TCP socket is dead. `collect` now branches: TLS observed → its socket; else scheme is
+  https → `unobserved("no encrypted channel: …")` touching no socket; else → the TCP socket (still
+  required for `--no-tls`). (2) `final["url"]` now comes from a separate `fetched_url` tracked at each
+  successful fetch — the draft reassigned `url` before the loop ended, so a chain hitting
+  `MAX_REDIRECTS` reported an unfetched URL alongside the previous hop's measurements. (3) the section
+  carries `redirect_limit_reached: bool`, so a truncated chain is visible rather than silent.
+  (4) `fetch` closes the per-hop sockets `_open` creates (`opened_here = sock is None`, `try/finally`)
+  and never the first hop's, which belongs to the orchestrator. (5) `content_type` and `reason` are
+  `None` when absent, not `""` — an empty string is a fabricated value, not a measurement.
+
   Section shape:
 
 ```python
