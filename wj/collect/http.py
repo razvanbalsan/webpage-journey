@@ -85,23 +85,29 @@ def decode_body(headers, body):
     if (header_value(headers, "transfer-encoding") or "").lower() == "chunked":
         body = dechunk(body)
 
+    # A decompression failure returns None for the decoded body, not the raw
+    # (still-compressed) bytes under the same encoding label -- returning the
+    # raw bytes made decoded == wire and produced a ~1.0 "compression ratio"
+    # that looked like a measurement instead of a decode failure. `encoding`
+    # itself is still reported: the header really did say so, and it is a
+    # separate fact from whether this tool could act on it.
     encoding = (header_value(headers, "content-encoding") or "").lower() or None
     if encoding == "gzip":
         try:
             return gzip.decompress(body), "gzip"
         except OSError:
-            return body, "gzip"
+            return None, "gzip"
     if encoding == "deflate":
         try:
             return zlib.decompress(body), "deflate"
         except zlib.error:
-            return body, "deflate"
+            return None, "deflate"
     if encoding == "br":
         try:
             import brotli
             return brotli.decompress(body), "br"
         except Exception:
-            return body, "br"
+            return None, "br"
     return body, encoding
 
 
@@ -295,7 +301,8 @@ def collect(ctx, fetch=None):
 
     decoded, encoding = decode_body(response["headers"], response["body"])
     wire = response.get("wire_bytes") or len(response["body"])
-    ratio = round(len(decoded) / wire, 2) if wire and encoding else None
+    ratio = round(len(decoded) / wire, 2) if wire and encoding and decoded is not None else None
+    decoded_bytes = len(decoded) if decoded is not None else None
     raw_content_type = header_value(response["headers"], "content-type")
     content_type = raw_content_type.split(";")[0].strip() if raw_content_type else None
 
@@ -305,7 +312,7 @@ def collect(ctx, fetch=None):
         final={"url": fetched_url, "status": response["status"], "reason": response.get("reason"),
                "protocol": response.get("protocol"), "headers": response["headers"],
                "ttfb_ms": response.get("ttfb_ms"), "total_ms": response.get("total_ms"),
-               "wire_bytes": wire, "decoded_bytes": len(decoded),
+               "wire_bytes": wire, "decoded_bytes": decoded_bytes,
                "encoding": encoding, "ratio": ratio, "content_type": content_type},
         cache=cache_state(response["headers"]),
         cdn=detect_cdn(response["headers"]),

@@ -180,6 +180,11 @@ def collect(ctx, run=None, public_ip=None):
     local_ip = link.get("ipv4") or route.get("src")
     public = public_ip()
 
+    # nat is None, not False, when the public IP could not be learned (the
+    # ipwho.is lookup failed) -- "not NAT'd" and "could not tell" are different
+    # claims, and a confident "no" here is a wrong answer, not an absent one.
+    nat = is_private(local_ip) and local_ip != public if local_ip and public else None
+
     return observed(
         interface=interface,
         link=link.get("status"),
@@ -190,5 +195,5 @@ def collect(ctx, run=None, public_ip=None):
         gateway_mac=gateway_mac,
         dhcp=dhcp,
         public_ip=public,
-        nat=bool(local_ip and public and is_private(local_ip) and local_ip != public),
+        nat=nat,
     )

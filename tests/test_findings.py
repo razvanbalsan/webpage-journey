@@ -86,6 +86,20 @@ def test_flags_a_plaintext_redirect_hop():
     assert any("plaintext" in t for t in texts(trace))
 
 
+def test_flags_a_failed_decompression_instead_of_reporting_a_fake_ratio():
+    # I4: a failed inflate leaves decoded_bytes/ratio absent (wj/collect/http.py)
+    # rather than presenting wire==decoded as a measured ~1.0 compression ratio.
+    trace = base_trace()
+    trace["http"] = {"observed": True, "hops": [],
+                     "final": {"status": 200, "encoding": "gzip",
+                               "wire_bytes": 15, "decoded_bytes": None, "ratio": None},
+                     "security": {"grade": "A", "missing": [], "cookies": []}}
+    findings.analyse(trace)
+    joined = " ".join(texts(trace))
+    assert "gzip" in joined
+    assert "could not decompress" in joined
+
+
 def test_flags_a_poor_security_grade_and_insecure_cookies():
     trace = base_trace()
     trace["http"] = {"observed": True, "hops": [], "final": {"status": 200},
@@ -134,6 +148,15 @@ def test_alpn_gap_note_does_not_claim_a_negotiation_that_did_not_happen():
     joined = " ".join(n["text"] for n in trace["notes"])
     assert "negotiated http/1.1" not in joined
     assert "did not negotiate" in joined
+
+
+def test_analyse_is_idempotent_not_cumulative():
+    trace = base_trace()
+    trace["tls"] = {"observed": True, "chain": [{"days_left": 9, "subject_cn": "example.com"}],
+                    "legacy_versions_accepted": []}
+    findings.analyse(trace)
+    findings.analyse(trace)
+    assert len(trace["notes"]) == 1
 
 
 def test_unobserved_sections_are_skipped_silently():

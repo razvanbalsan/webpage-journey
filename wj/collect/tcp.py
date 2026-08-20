@@ -26,7 +26,7 @@ def plausible_rtt_ms(value):
 
 
 def candidates_from_dns(dns_section):
-    """IPv6 first, then IPv4 — the ordering RFC 8305 Happy Eyeballs prescribes."""
+    """IPv6 candidates listed first, then IPv4 -- ordering only, not staggering."""
     if not dns_section.get("observed"):
         return []
     records = dns_section.get("records", {})
@@ -85,6 +85,13 @@ def read_kernel_info(sock):
 
 
 def collect(ctx):
+    # This is a simultaneous connect race, not Happy Eyeballs (RFC 8305): every
+    # candidate starts at once via pool.map, rather than staging IPv6 first and
+    # delaying IPv4 by the RFC's "connection attempt delay". The per-socket
+    # timings below are real measurements either way, but with more than four
+    # candidates the ThreadPoolExecutor's worker cap means later entries wait
+    # behind earlier ones for a free thread -- a structural disadvantage that
+    # has nothing to do with which family they belong to.
     candidates = candidates_from_dns(ctx.results.get("dns", {}))
     if not candidates:
         return unobserved("no resolved address to connect to")

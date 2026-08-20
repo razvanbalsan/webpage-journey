@@ -7,6 +7,11 @@ POOR_GRADES = ("D", "E", "F")
 
 
 def analyse(trace):
+    # Derived data must be rebuilt, not appended to -- redact_trace learned this
+    # already (it rebuilds trace["osi"] rather than trying to redact the free
+    # text baked into it). Calling analyse() twice on the same trace without
+    # this would duplicate every note it produces.
+    trace["notes"] = []
     _analyse_dns(trace)
     _analyse_tls(trace)
     _analyse_http(trace)
@@ -68,6 +73,13 @@ def _analyse_http(trace):
     http = trace.get("http", {})
     if not http.get("observed"):
         return
+
+    final = http.get("final") or {}
+    if final.get("encoding") and final.get("decoded_bytes") is None:
+        add_note(trace, "warn", "http",
+                 f"the response advertised {final['encoding']} but this tool "
+                 f"could not decompress it — decoded size and compression ratio "
+                 f"are not measured")
 
     for hop in http.get("hops") or []:
         if str(hop.get("url", "")).startswith("http://"):

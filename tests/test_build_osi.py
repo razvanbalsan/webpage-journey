@@ -190,6 +190,30 @@ def test_layer_five_with_no_redirects_does_not_mention_redirects():
     assert "redirect" not in joined
 
 
+def test_layer_six_guards_a_partial_compression_combo_ratio_missing():
+    # I1: the general standing guard below sets encoding=None AND ratio=None
+    # together, which never opens the `if final.get("encoding")` branch --
+    # the partial combination (encoding present, ratio absent, e.g. a failed
+    # inflate) is the shape that actually reaches the buggy code.
+    trace = full_trace()
+    trace["http"]["final"].update(encoding="gzip", ratio=None,
+                                   wire_bytes=14000, decoded_bytes=None)
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l6"]["facts"])
+    assert "None" not in joined
+    assert "gzip" in joined
+
+
+def test_layer_six_guards_a_partial_compression_combo_decoded_bytes_missing():
+    trace = full_trace()
+    trace["http"]["final"].update(encoding="gzip", ratio=4.36,
+                                   wire_bytes=14000, decoded_bytes=None)
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l6"]["facts"])
+    assert "None" not in joined
+    assert "14000" in joined
+
+
 def test_all_optional_sub_fields_none_never_prints_the_literal_none():
     trace = full_trace()
     trace["local"].update(link=None, mtu=None, local_ip=None, local_mac=None,

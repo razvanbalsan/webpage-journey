@@ -105,6 +105,34 @@ def test_collect_assembles_a_section_from_injected_commands():
     assert section["dhcp"]["lease_seconds"] == 86400
 
 
+def test_nat_is_none_not_false_when_the_public_ip_lookup_fails():
+    # I2: "not NAT'd" and "could not tell" are different claims. When ipwho.is
+    # fails, public_ip() returns None -- nat must be None (unknown), not a
+    # confident False, which both renderers would otherwise print as "no".
+    caps = capabilities.Capabilities(
+        libs={}, tools={"route": "/sbin/route", "ifconfig": "/sbin/ifconfig",
+                        "arp": "/usr/sbin/arp", "ipconfig": "/usr/sbin/ipconfig"},
+        privileged=False, can_sudo=False)
+    ctx = Context(host="example.com", scheme="https", port=443, path="/",
+                  timeout=5.0, deadline=1e9, caps=caps, results={})
+    ctx.results["tcp"] = {"observed": True, "chosen": {"ip": "93.184.216.34"}}
+
+    outputs = {
+        "route": read("route_get_darwin.txt"),
+        "ifconfig": read("ifconfig_en0.txt"),
+        "arp": read("arp_gateway.txt"),
+        "ipconfig": read("ipconfig_getpacket.txt"),
+    }
+
+    section = local_collect.collect(
+        ctx, run=lambda cmd, timeout: outputs[cmd[0]],
+        public_ip=lambda: None)
+
+    assert section["observed"] is True
+    assert section["public_ip"] is None
+    assert section["nat"] is None
+
+
 def test_collect_without_any_tooling_is_unobserved():
     caps = capabilities.Capabilities(libs={}, tools={}, privileged=False, can_sudo=False)
     ctx = Context(host="example.com", scheme="https", port=443, path="/",

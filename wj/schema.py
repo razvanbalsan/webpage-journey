@@ -24,6 +24,22 @@ def unobserved(why_not):
     return {"observed": False, "why_not": why_not}
 
 
+def join_present(parts, sep=" "):
+    """Join the present parts with sep, silently dropping any that are missing.
+
+    A missing part is None, "", or [] -- never spelled out as the literal
+    string 'None'. Returns None (not "") when nothing is present, so callers
+    that already treat a falsy value as "drop this row" keep working
+    unchanged. This is the one primitive for every multi-part fact built in
+    this module and in render.py -- no fact is ever built by hand-
+    concatenating optional values with a bare +/f-string, because that is
+    exactly how a missing value turns into the literal text "None" reaching
+    a user.
+    """
+    present = [str(p) for p in parts if p not in (None, "", [])]
+    return sep.join(present) if present else None
+
+
 def new_trace(target, tool_version, generated_at, capabilities, redacted):
     trace = {
         "schema": SCHEMA,
@@ -166,9 +182,18 @@ def build_osi(trace):
         if tls.get("alpn"):
             l6_facts.append(f"ALPN {tls['alpn']}")
     if final.get("encoding"):
-        l6_facts.append(
-            f"{final['encoding']}: {final.get('wire_bytes')} → {final.get('decoded_bytes')} bytes"
-            + (f" ({final['ratio']}:1)" if final.get("ratio") else ""))
+        # wire_bytes/decoded_bytes/ratio can each independently be absent (a
+        # failed inflate leaves decoded_bytes/ratio unset while wire_bytes
+        # stays known) -- build the sentence from only what is present, rather
+        # than spelling a missing one out as the literal text "None".
+        sizes = join_present([
+            f"{final['wire_bytes']} bytes" if final.get("wire_bytes") is not None else None,
+            f"{final['decoded_bytes']} bytes" if final.get("decoded_bytes") is not None else None,
+        ], sep=" → ")
+        ratio_part = f"({final['ratio']}:1)" if final.get("ratio") is not None else None
+        detail = join_present([sizes, ratio_part], sep=" ")
+        l6_facts.append(join_present([f"{final['encoding']}:", detail], sep=" ")
+                        if detail else final["encoding"])
     if final.get("content_type"):
         l6_facts.append(final["content_type"])
 

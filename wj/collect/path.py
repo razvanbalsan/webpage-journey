@@ -135,10 +135,13 @@ def collect(ctx, run=None, asn_lookup=None):
         if hop["ip"]:
             info = asn_lookup(hop["ip"])
             hop["asn"] = info.get("asn")
-            hop["as_name"] = info.get("prefix")
+            # Cymru's TXT answer is "AS | BGP Prefix | CC | Registry | Allocated"
+            # -- parts[1] is the announced BGP prefix, not the AS's name. The
+            # field is named for what it actually holds.
+            hop["prefix"] = info.get("prefix")
         else:
             hop["asn"] = None
-            hop["as_name"] = None
+            hop["prefix"] = None
 
     return observed(source="traceroute", hops=hops,
                     asn_path=asn_path(hops), path_mtu=None)

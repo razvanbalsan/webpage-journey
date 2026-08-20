@@ -61,6 +61,19 @@ def test_render_findings_says_so_when_there_is_nothing_to_report():
     assert "Nothing" in out or "No findings" in out
 
 
+def test_render_findings_says_nothing_worth_flagging_with_only_info_notes():
+    # An info-severity note (e.g. "no HTTP/3 advertised") fires for most real
+    # hosts -- gating the green "nothing worth flagging" message on ANY note
+    # made it effectively unreachable. It must still say so when only
+    # advisory (info) notes are present, and show them separately.
+    trace = full_trace()
+    trace["notes"] = [{"severity": "info", "section": "dns", "text": "no HTTP/3 advertised"}]
+    out = capture(render.render_findings, trace)
+    assert "Nothing worth flagging" in out
+    assert "no HTTP/3 advertised" in out
+    assert "Advisory" in out
+
+
 def test_render_ladder_prints_this_hosts_commands():
     out = capture(render.render_ladder, full_trace())
     assert "ping 93.184.216.34" in out
@@ -164,6 +177,50 @@ def test_render_tls_cert_row_shows_marker_when_no_fields_parsed():
     assert "None" not in out
     assert "Cert 0" in out
     assert "no fields parsed" in out
+
+
+def test_render_http_body_row_guards_a_partial_compression_combo_ratio_missing():
+    # I1: the standing guard below sets encoding=None AND ratio=None together,
+    # which never opens the `if final.get("encoding")` branch at all -- the
+    # partial combination (encoding present, its companion ratio absent, e.g.
+    # a failed inflate) is the shape that actually reaches the buggy code.
+    trace = full_trace()
+    trace["http"]["final"].update(encoding="gzip", ratio=None,
+                                  wire_bytes=14000, decoded_bytes=None)
+    out = capture(render.render_http, trace)
+    assert "None" not in out
+    assert "gzip" in out
+
+
+def test_render_http_body_row_guards_a_partial_compression_combo_wire_bytes_missing():
+    trace = full_trace()
+    trace["http"]["final"].update(encoding="gzip", ratio=4.36,
+                                  wire_bytes=None, decoded_bytes=61000)
+    out = capture(render.render_http, trace)
+    assert "None" not in out
+    assert "61000" in out
+
+
+def test_render_tls_cert_row_guards_a_key_with_a_type_but_no_bit_size():
+    # Ed25519PublicKey has no key_size attribute in cryptography's model, so
+    # key.type is present while key.bits is legitimately None -- the old bare
+    # f"{type}{bits}" produced the literal text "Ed25519PublicKeyNone".
+    trace = full_trace()
+    trace["tls"]["chain"] = [{"subject_cn": "example.com", "issuer_cn": "R3",
+                              "key": {"type": "Ed25519PublicKey", "bits": None},
+                              "days_left": 80, "sans": []}]
+    out = capture(render.render_tls, trace)
+    assert "None" not in out
+    assert "Ed25519PublicKey" in out
+
+
+def test_render_dns_delegation_hop_shows_the_error_instead_of_a_bare_arrow():
+    trace = full_trace()
+    trace["dns"]["delegation"] = [
+        {"level": "root", "server": "198.41.0.4", "error": "timed out"}]
+    out = capture(render.render_dns, trace)
+    assert "timed out" in out
+    assert "None" not in out
 
 
 def test_render_trace_never_prints_none_with_every_optional_subfield_absent():

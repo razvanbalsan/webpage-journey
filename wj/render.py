@@ -89,26 +89,23 @@ def _unobserved_panel(console, section, title, layers, border):
            title, layers, border)
 
 
-def _pair(a, b, sep="  "):
-    """Join two optional strings, without ever spelling out a missing one as 'None'."""
-    if a and b:
-        return f"{a}{sep}({b})"
-    return a or b
-
-
+join_present = schema.join_present
 def render_local(console, trace):
     section = trace.get("local", {})
     if not section.get("observed"):
         return _unobserved_panel(console, section, "1 · Your local network", (1, 2), "medium_purple")
 
+    nat = section.get("nat")
+    nat_text = ("yes — your private address is translated on the way out" if nat is True
+                else "no" if nat is False else None)  # None: could not be determined
+
     body = _kv_table([
-        ("Interface", _pair(section.get("interface"), section.get("link"))),
+        ("Interface", join_present([section.get("interface"), section.get("link")], sep="  ")),
         ("MTU", section.get("mtu")),
-        ("Your address", _pair(section.get("local_ip"), section.get("local_mac"))),
-        ("Gateway", _pair(section.get("gateway_ip"), section.get("gateway_mac"))),
+        ("Your address", join_present([section.get("local_ip"), section.get("local_mac")], sep="  ")),
+        ("Gateway", join_present([section.get("gateway_ip"), section.get("gateway_mac")], sep="  ")),
         ("Public address", section.get("public_ip")),
-        ("NAT", "yes — your private address is translated on the way out"
-                if section.get("nat") else "no"),
+        ("NAT", nat_text),
         ("DHCP server", (section.get("dhcp") or {}).get("server")),
     ])
     _panel(console, body, "1 · Your local network", (1, 2), "medium_purple")
@@ -152,8 +149,16 @@ def render_dns(console, trace):
         footer += f" · DNSSEC {section['dnssec']}"
     tree.add(f"[dim]{footer}[/dim]")
     for hop in section.get("delegation") or []:
-        tree.add(f"[dim]{hop.get('level')}: {hop.get('server')} → "
-                 f"{', '.join(hop.get('referral') or hop.get('answer') or [])}[/dim]")
+        where = f"{hop.get('level') or '?'}: {hop.get('server') or '?'}"
+        if hop.get("error"):
+            # walk_delegation's exception path emits {"level", "server", "error"}
+            # with no "referral"/"answer" key at all -- interpolating only those
+            # two silently dropped the error and rendered an empty arrow to
+            # nothing (I6). Show the failure instead of hiding it.
+            tree.add(f"[red]{where} → {hop['error']}[/red]")
+            continue
+        next_hop = ", ".join(hop.get("referral") or hop.get("answer") or []) or "no referral"
+        tree.add(f"[dim]{where} → {next_hop}[/dim]")
 
     _panel(console, tree, "2 · DNS resolution", (7, 4, 3), "blue")
 
@@ -227,7 +232,10 @@ def render_tls(console, trace):
         subject, issuer = cert.get("subject_cn"), cert.get("issuer_cn")
         names = f"{subject} ← {issuer}" if subject and issuer else (subject or issuer)
         key = cert.get("key") or {}
-        key_text = f"{key.get('type')}{key.get('bits')}" if key.get("type") else None
+        # An Ed25519 key has no key_size attribute in cryptography's model, so
+        # key.bits is legitimately None even though key.type is present -- the
+        # old bare f"{type}{bits}" produced the literal text "Ed25519PublicKeyNone".
+        key_text = join_present([key.get("type"), key.get("bits")], sep="") if key.get("type") else None
         days_left = cert.get("days_left")
         days_text = f"{days_left} days left" if days_left is not None else None
         detail = " · ".join(p for p in (names, key_text, days_text) if p)
@@ -282,7 +290,8 @@ def render_http(console, trace):
 
     rows = []
     for hop in section.get("hops") or []:
-        rows.append((f"{hop['status']} redirect", f"{hop['url']} → {hop['location']}"))
+        rows.append((f"{hop['status']} redirect",
+                     join_present([hop.get("url"), hop.get("location")], sep=" → ")))
     if section.get("redirect_limit_reached") and section.get("hops"):
         # A hop count alone reads as the whole chain — say plainly that it was cut short.
         rows.append(("", f"[dim]redirect chain truncated after "
@@ -298,15 +307,25 @@ def render_http(console, trace):
         cache_parts.append(cache["directives"])
     cache_value = " · ".join(cache_parts) if cache_parts else None
 
+    wire, decoded = final.get("wire_bytes"), final.get("decoded_bytes")
+    encoding, ratio = final.get("encoding"), final.get("ratio")
+    # wire_bytes/decoded_bytes/ratio can each independently be absent (a failed
+    # inflate leaves decoded_bytes/ratio unset while wire_bytes stays known) --
+    # build the sentence from only what is actually present.
+    body_sizes = join_present([
+        f"{wire} bytes on the wire" if wire is not None else None,
+        f"{decoded} decoded" if decoded is not None else None,
+    ], sep=" → ")
+    body_detail = f"({encoding}, {ratio}:1)" if encoding and ratio is not None else \
+                  f"({encoding})" if encoding else None
+    body_text = join_present([body_sizes, body_detail], sep=" ")
+
     rows += [
         ("Status", status_text),
         ("URL", final.get("url")),
         ("TTFB", f"{final.get('ttfb_ms')} ms" if final.get("ttfb_ms") is not None else None),
         ("Total", f"{final.get('total_ms')} ms" if final.get("total_ms") is not None else None),
-        ("Body", f"{final.get('wire_bytes')} bytes on the wire → "
-                 f"{final.get('decoded_bytes')} decoded"
-                 + (f" ({final.get('encoding')}, {final.get('ratio')}:1)"
-                    if final.get("encoding") else "")),
+        ("Body", body_text),
         ("Content type", final.get("content_type")),
         ("CDN", section.get("cdn")),
         ("Cache", cache_value),
@@ -317,24 +336,39 @@ def render_http(console, trace):
 
 
 def render_findings(console, trace):
-    notes = sorted(trace.get("notes") or [],
-                   key=lambda n: SEVERITY_ORDER.get(n["severity"], 9))
-    if not notes:
+    notes = trace.get("notes") or []
+    # An info-severity note ("no HTTP/3 advertised") fires for most of the
+    # internet, so gating "nothing worth flagging" on ANY note made that
+    # green message effectively unreachable. Actionable (warn/critical) and
+    # advisory (info) are judged and shown separately.
+    actionable = sorted((n for n in notes if n["severity"] in ("warn", "critical")),
+                        key=lambda n: SEVERITY_ORDER.get(n["severity"], 9))
+    advisory = [n for n in notes if n["severity"] == "info"]
+
+    if not actionable:
         console.print(Panel("[green]Nothing worth flagging in this trace.[/green]",
                             title="[bold]Findings[/bold]", border_style="green",
                             box=box.ROUNDED))
-        return
+    else:
+        table = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
+        table.add_column(no_wrap=True)
+        table.add_column(style="dim", no_wrap=True)
+        table.add_column(overflow="fold")
+        for note in actionable:
+            style = SEVERITY_STYLE.get(note["severity"], "")
+            table.add_row(f"[{style}]{note['severity']}[/{style}]", note["section"], note["text"])
 
-    table = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
-    table.add_column(no_wrap=True)
-    table.add_column(style="dim", no_wrap=True)
-    table.add_column(overflow="fold")
-    for note in notes:
-        style = SEVERITY_STYLE.get(note["severity"], "")
-        table.add_row(f"[{style}]{note['severity']}[/{style}]", note["section"], note["text"])
+        console.print(Panel(table, title=f"[bold]Findings[/bold]  ({len(actionable)})",
+                            border_style="yellow", box=box.ROUNDED))
 
-    console.print(Panel(table, title=f"[bold]Findings[/bold]  ({len(notes)})",
-                        border_style="yellow", box=box.ROUNDED))
+    if advisory:
+        table = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
+        table.add_column(style="dim", no_wrap=True)
+        table.add_column(overflow="fold")
+        for note in advisory:
+            table.add_row(note["section"], note["text"])
+        console.print(Panel(table, title=f"[bold]Advisory[/bold]  ({len(advisory)})",
+                            border_style="cyan", box=box.ROUNDED))
 
 
 def render_waterfall(console, trace):
@@ -413,11 +447,29 @@ def render_ladder(console, trace):
                         border_style="white", box=box.ROUNDED))
 
 
+def _target_url(target):
+    """Build a scheme://host:port/path string from only the parts present.
+
+    A fully-formed target has all four; a hand-built or malformed target
+    document might not. Bare-concatenating all four unconditionally produced
+    the literal text "None://None:NoneNone" when they were absent.
+    """
+    scheme, host, port, path = (target.get("scheme"), target.get("host"),
+                                target.get("port"), target.get("path"))
+    if not host:
+        return "(no target)"
+    url = f"{scheme}://{host}" if scheme else host
+    if port is not None:
+        url += f":{port}"
+    if path:
+        url += path
+    return url
+
+
 def render_trace(console, trace):
     target = trace.get("target", {})
     console.print(Panel(
-        f"[bold]{target.get('scheme')}://{target.get('host')}:{target.get('port')}"
-        f"{target.get('path')}[/bold]",
+        f"[bold]{_target_url(target)}[/bold]",
         title="Traced", border_style="white", box=box.HEAVY))
 
     render_local(console, trace)

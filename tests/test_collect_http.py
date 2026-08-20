@@ -69,6 +69,23 @@ def test_decode_body_dechunks_before_inflating():
     assert decoded == payload
 
 
+def test_decode_body_a_failed_gzip_inflate_returns_none_not_the_raw_bytes():
+    # I4: returning the raw (still-compressed) bytes under the "gzip" label
+    # made decoded == wire and produced a ~1.0 "compression ratio" that read
+    # as a measurement instead of a decode failure.
+    headers = [("Content-Encoding", "gzip")]
+    decoded, encoding = http_collect.decode_body(headers, b"not actually gzip")
+    assert decoded is None
+    assert encoding == "gzip"
+
+
+def test_decode_body_a_failed_deflate_inflate_returns_none():
+    headers = [("Content-Encoding", "deflate")]
+    decoded, encoding = http_collect.decode_body(headers, b"not actually deflate")
+    assert decoded is None
+    assert encoding == "deflate"
+
+
 def test_parse_cookies_reads_flags():
     headers = [("Set-Cookie", "session=abc123; Path=/; Secure; HttpOnly; SameSite=Lax"),
                ("Set-Cookie", "tracking=1; Path=/")]
@@ -153,6 +170,28 @@ def test_collect_follows_a_redirect_chain(monkeypatch):
     assert section["final"]["status"] == 200
     assert section["final"]["url"] == "https://www.example.com/"
     assert section["final"]["decoded_bytes"] == 13
+
+
+def test_collect_a_failed_inflate_leaves_decoded_bytes_and_ratio_absent():
+    from wj import capabilities
+    from wj.context import Context
+
+    caps = capabilities.Capabilities(libs={}, tools={}, privileged=False, can_sudo=False)
+    ctx = Context(host="example.com", scheme="https", port=443, path="/",
+                  timeout=5.0, deadline=1e9, caps=caps, results={})
+    ctx.results["tcp"] = {"observed": True, "_socket": object()}
+    ctx.results["tls"] = {"observed": True, "_socket": object()}
+
+    def fetch(url, sock):
+        return {"protocol": "HTTP/1.1", "status": 200, "reason": "OK",
+                "headers": [("Content-Encoding", "gzip")], "body": b"not really gzip",
+                "ttfb_ms": 1.0, "total_ms": 2.0, "wire_bytes": 15}
+
+    section = http_collect.collect(ctx, fetch=fetch)
+    assert section["final"]["encoding"] == "gzip"
+    assert section["final"]["wire_bytes"] == 15
+    assert section["final"]["decoded_bytes"] is None
+    assert section["final"]["ratio"] is None
 
 
 def test_collect_stops_at_the_redirect_limit():
