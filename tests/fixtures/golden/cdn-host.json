@@ -1,0 +1,461 @@
+{
+  "schema": "webpage-journey-trace/1",
+  "generated_at": "2026-08-20T09:31:02+00:00",
+  "tool": {
+    "name": "trace.py",
+    "version": "2.0.0"
+  },
+  "target": {
+    "input": "https://example.com/",
+    "host": "example.com",
+    "scheme": "https",
+    "port": 443,
+    "path": "/"
+  },
+  "capabilities": {
+    "privileged": false,
+    "can_sudo": false,
+    "tools": [
+      "arp",
+      "ifconfig",
+      "route",
+      "traceroute"
+    ],
+    "libs": {
+      "dns": true,
+      "cryptography": true,
+      "h2": false
+    },
+    "installed_during_run": []
+  },
+  "redacted": false,
+  "timings": {
+    "waterfall": [
+      {
+        "label": "DNS",
+        "start_ms": 0.0,
+        "end_ms": 41.2
+      },
+      {
+        "label": "TCP",
+        "start_ms": 41.2,
+        "end_ms": 53.6
+      },
+      {
+        "label": "TLS",
+        "start_ms": 53.6,
+        "end_ms": 91.8
+      },
+      {
+        "label": "TTFB",
+        "start_ms": 91.8,
+        "end_ms": 179.8
+      },
+      {
+        "label": "Download",
+        "start_ms": 179.8,
+        "end_ms": 200.8
+      }
+    ],
+    "total_ms": 200.8
+  },
+  "osi": {
+    "l1": {
+      "observed": true,
+      "facts": [
+        "interface en0",
+        "link active",
+        "MTU 1500"
+      ],
+      "why_not": null,
+      "test_command": "ifconfig en0"
+    },
+    "l2": {
+      "observed": true,
+      "facts": [
+        "your MAC aa:bb:cc:dd:ee:ff",
+        "\u2192 gateway MAC 11:22:33:44:55:66 (192.168.1.1)",
+        "every frame to this server is addressed to your router, not to the server"
+      ],
+      "why_not": null,
+      "test_command": "arp -n 192.168.1.1"
+    },
+    "l3": {
+      "observed": true,
+      "facts": [
+        "192.168.1.23 \u2192 104.16.132.229",
+        "NAT: 192.168.1.23 appears as 81.180.20.7",
+        "4 hops",
+        "AS8708 \u2192 AS13335"
+      ],
+      "why_not": null,
+      "test_command": "ping 104.16.132.229"
+    },
+    "l4": {
+      "observed": true,
+      "facts": [
+        "TCP :54213 \u2192 :443",
+        "RTT 12.4 ms",
+        "MSS 1460",
+        "0 retransmits",
+        "ipv4 won the connection race"
+      ],
+      "why_not": null,
+      "test_command": "nc -vz example.com 443"
+    },
+    "l5": {
+      "observed": true,
+      "facts": [
+        "TLS session established",
+        "1 request over this connection",
+        "1 redirect(s), each on a new connection"
+      ],
+      "why_not": null,
+      "test_command": null
+    },
+    "l6": {
+      "observed": true,
+      "facts": [
+        "TLSv1.3 \u00b7 TLS_AES_128_GCM_SHA256",
+        "ALPN http/1.1",
+        "gzip: 14000 bytes \u2192 61000 bytes (4.36:1)",
+        "text/html"
+      ],
+      "why_not": null,
+      "test_command": "openssl s_client -connect example.com:443 -servername example.com"
+    },
+    "l7": {
+      "observed": true,
+      "facts": [
+        "HTTP/1.1 \u2192 200",
+        "1 redirect(s) followed",
+        "DNS: example.com \u2192 104.16.132.229",
+        "resolved via 1.1.1.1, DNSSEC secure"
+      ],
+      "why_not": null,
+      "test_command": "curl -sSI https://example.com/"
+    }
+  },
+  "notes": [
+    {
+      "severity": "warn",
+      "section": "tls",
+      "text": "certificate expires in 10 days"
+    },
+    {
+      "severity": "info",
+      "section": "tls",
+      "text": "this host advertises h3, h2, but this tool only offers HTTP/1.1 and negotiated http/1.1"
+    },
+    {
+      "severity": "warn",
+      "section": "http",
+      "text": "redirect hop http://example.com/ travelled in plaintext before the upgrade"
+    }
+  ],
+  "local": {
+    "observed": true,
+    "interface": "en0",
+    "link": "active",
+    "mtu": 1500,
+    "local_ip": "192.168.1.23",
+    "local_mac": "aa:bb:cc:dd:ee:ff",
+    "gateway_ip": "192.168.1.1",
+    "gateway_mac": "11:22:33:44:55:66",
+    "dhcp": {
+      "server": "192.168.1.1",
+      "lease_seconds": 86400,
+      "dns": [
+        "192.168.1.1"
+      ]
+    },
+    "public_ip": "81.180.20.7",
+    "nat": true
+  },
+  "dns": {
+    "observed": true,
+    "records": {
+      "A": [
+        {
+          "data": "104.16.132.229",
+          "ttl": 300
+        }
+      ],
+      "AAAA": [
+        {
+          "data": "2606:4700::6810:84e5",
+          "ttl": 300
+        }
+      ],
+      "CNAME": [],
+      "MX": [],
+      "NS": [
+        {
+          "data": "ns1.example.net",
+          "ttl": 3600
+        }
+      ],
+      "TXT": [
+        {
+          "data": "v=spf1 -all",
+          "ttl": 3600
+        }
+      ],
+      "SOA": [],
+      "CAA": [
+        {
+          "data": "0 issue \"letsencrypt.org\"",
+          "ttl": 3600
+        }
+      ],
+      "HTTPS": [
+        {
+          "data": "1 . alpn=\"h3,h2\"",
+          "ttl": 300
+        }
+      ]
+    },
+    "records_failed": [],
+    "resolver": {
+      "servers": [
+        "1.1.1.1"
+      ],
+      "source": "scutil"
+    },
+    "dnssec": "secure",
+    "delegation": [
+      {
+        "level": "root",
+        "server": "198.41.0.4",
+        "referral": [
+          "a.gtld-servers.net"
+        ],
+        "answer": []
+      },
+      {
+        "level": "tld",
+        "server": "192.5.6.30",
+        "referral": [
+          "ns1.example.net"
+        ],
+        "answer": []
+      },
+      {
+        "level": "authoritative",
+        "server": "203.0.113.9",
+        "referral": [],
+        "answer": [
+          "ns1.example.net"
+        ]
+      }
+    ],
+    "alpn_advertised": [
+      "h3",
+      "h2"
+    ],
+    "ech": false,
+    "timing_ms": {
+      "cold": 41.2,
+      "warm": 1.1
+    }
+  },
+  "tcp": {
+    "observed": true,
+    "candidates": [
+      {
+        "ip": "104.16.132.229",
+        "family": "ipv4",
+        "connect_ms": 12.4,
+        "error": null
+      }
+    ],
+    "chosen": {
+      "ip": "104.16.132.229",
+      "family": "ipv4",
+      "port": 443
+    },
+    "winner_family": "ipv4",
+    "local": {
+      "ip": "192.168.1.23",
+      "port": 54213
+    },
+    "kernel": {
+      "rtt_ms": 12.4,
+      "mss": 1460,
+      "retransmits": 0,
+      "source": "TCP_INFO"
+    }
+  },
+  "tls": {
+    "observed": true,
+    "version": "TLSv1.3",
+    "cipher": "TLS_AES_128_GCM_SHA256",
+    "alpn": "http/1.1",
+    "handshake_ms": 38.2,
+    "chain": [
+      {
+        "subject_cn": "example.com",
+        "issuer_cn": "R11",
+        "issuer_org": "Let's Encrypt",
+        "not_before": "2026-06-01T00:00:00+00:00",
+        "not_after": "2026-08-30T00:00:00+00:00",
+        "days_left": 10,
+        "key": {
+          "type": "EC",
+          "bits": 256
+        },
+        "sig_algo": "ecdsa-with-SHA256",
+        "sans": [
+          "example.com",
+          "www.example.com"
+        ],
+        "scts": 2,
+        "ocsp": [
+          "http://r11.o.lencr.org"
+        ],
+        "is_ca": false
+      },
+      {
+        "subject_cn": "R11",
+        "issuer_cn": "ISRG Root X1",
+        "issuer_org": null,
+        "not_before": "2024-03-13T00:00:00+00:00",
+        "not_after": "2027-03-13T00:00:00+00:00",
+        "days_left": 205,
+        "key": {
+          "type": "RSA",
+          "bits": 2048
+        },
+        "sig_algo": "sha256WithRSAEncryption",
+        "sans": [],
+        "scts": 0,
+        "ocsp": [
+          "http://x1.i.lencr.org/"
+        ],
+        "is_ca": true
+      }
+    ],
+    "trust_root": "R11",
+    "verified": true,
+    "caa_match": null,
+    "resumption": {
+      "tested": false
+    },
+    "legacy_versions_accepted": []
+  },
+  "http": {
+    "observed": true,
+    "hops": [
+      {
+        "url": "http://example.com/",
+        "status": 301,
+        "location": "https://example.com/",
+        "protocol": "HTTP/1.1",
+        "ttfb_ms": 40.1
+      }
+    ],
+    "redirect_limit_reached": false,
+    "final": {
+      "url": "https://example.com/",
+      "status": 200,
+      "reason": "OK",
+      "protocol": "HTTP/1.1",
+      "headers": [
+        [
+          "content-type",
+          "text/html; charset=utf-8"
+        ],
+        [
+          "content-encoding",
+          "gzip"
+        ],
+        [
+          "cache-control",
+          "max-age=300"
+        ]
+      ],
+      "ttfb_ms": 88.0,
+      "total_ms": 109.0,
+      "wire_bytes": 14000,
+      "decoded_bytes": 61000,
+      "encoding": "gzip",
+      "ratio": 4.36,
+      "content_type": "text/html"
+    },
+    "cache": {
+      "state": "HIT",
+      "age": 412,
+      "header": "cf-cache-status",
+      "directives": "max-age=300"
+    },
+    "cdn": "Cloudflare",
+    "security": {
+      "grade": "B",
+      "present": {
+        "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "geolocation=()",
+        "Cross-Origin-Opener-Policy": "same-origin"
+      },
+      "missing": [
+        "Content-Security-Policy"
+      ],
+      "cookies": [
+        {
+          "name": "session",
+          "secure": true,
+          "httponly": true,
+          "samesite": "Lax"
+        }
+      ],
+      "scheme": "https"
+    },
+    "conditional": {
+      "tested": false
+    }
+  },
+  "path": {
+    "observed": true,
+    "source": "traceroute",
+    "hops": [
+      {
+        "ttl": 1,
+        "ip": "192.168.1.1",
+        "rdns": "router.lan",
+        "rtt_ms": 1.2,
+        "asn": null,
+        "prefix": null
+      },
+      {
+        "ttl": 2,
+        "ip": null,
+        "rdns": null,
+        "rtt_ms": null,
+        "asn": null,
+        "prefix": null
+      },
+      {
+        "ttl": 3,
+        "ip": "203.0.113.9",
+        "rdns": "ae-1.border.example.net",
+        "rtt_ms": 14.5,
+        "asn": 8708,
+        "prefix": "203.0.113.0/24"
+      },
+      {
+        "ttl": 4,
+        "ip": "104.16.132.229",
+        "rdns": null,
+        "rtt_ms": 15.0,
+        "asn": 13335,
+        "prefix": "104.16.0.0/12"
+      }
+    ],
+    "asn_path": [
+      8708,
+      13335
+    ],
+    "path_mtu": null
+  }
+}

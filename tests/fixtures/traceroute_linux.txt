@@ -1,0 +1,5 @@
+traceroute to example.com (93.184.216.34), 30 hops max, 60 byte packets
+ 1  _gateway (192.168.1.1)  0.512 ms  0.489 ms  0.470 ms
+ 2  * * *
+ 3  ae-1.border.example.net (203.0.113.9)  12.004 ms  11.880 ms  11.910 ms
+ 4  93.184.216.34 (93.184.216.34)  13.220 ms  13.100 ms  13.050 ms

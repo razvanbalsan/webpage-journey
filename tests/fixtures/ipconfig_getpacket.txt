@@ -1,0 +1,6 @@
+op = BOOTREPLY
+htype = 1
+server_identifier (ip): 192.168.1.1
+lease_time (uint32): 0x15180
+domain_name_server (ip_mult): {192.168.1.1, 1.1.1.1}
+router (ip_mult): {192.168.1.1}
