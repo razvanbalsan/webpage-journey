@@ -84,3 +84,16 @@ def test_candidates_carry_no_socket_key_in_exportable_output(listening_port):
     for candidate in section["candidates"]:
         assert "socket" not in candidate
     section["_socket"].close()
+
+
+def test_plausible_rtt_accepts_a_real_measurement():
+    assert tcp_collect.plausible_rtt_ms(12.4) == 12.4
+    assert tcp_collect.plausible_rtt_ms(0.0) == 0.0
+
+
+def test_plausible_rtt_rejects_a_misread_struct_field():
+    # 200000 is what a send-buffer byte counter looked like when it was
+    # mistaken for a smoothed RTT.
+    assert tcp_collect.plausible_rtt_ms(200000) is None
+    assert tcp_collect.plausible_rtt_ms(-1) is None
+    assert tcp_collect.plausible_rtt_ms(None) is None

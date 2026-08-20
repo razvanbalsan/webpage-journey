@@ -9,6 +9,21 @@ from wj.schema import observed, unobserved
 
 FAMILY = {"ipv4": socket.AF_INET, "ipv6": socket.AF_INET6}
 
+# A smoothed RTT above this is not a measurement, it is a misread struct offset.
+IMPLAUSIBLE_RTT_MS = 60_000
+
+
+def plausible_rtt_ms(value):
+    """Return the RTT, or None when the number cannot be a round-trip time.
+
+    Struct offsets are derived per-platform and can drift between kernel
+    versions. A value that fails this check means we read the wrong field,
+    and reporting nothing is correct where reporting a guess is not.
+    """
+    if value is None or value < 0 or value > IMPLAUSIBLE_RTT_MS:
+        return None
+    return value
+
 
 def candidates_from_dns(dns_section):
     """IPv6 first, then IPv4 — the ordering RFC 8305 Happy Eyeballs prescribes."""
@@ -42,22 +57,24 @@ def read_kernel_info(sock):
     except OSError:
         mss = None
 
-    # Linux: TCP_INFO. struct tcp_info starts with 7 u8 then u32 rto/ato/snd_mss/rcv_mss,
-    # with tcpi_retransmits at offset 1 and tcpi_rtt at offset 76.
+    # Linux tcp_info: tcpi_retransmits is a u8 at offset 2; tcpi_rtt is a u32
+    # of microseconds at offset 68.
     try:
         raw = sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_INFO, 104)
-        retransmits = struct.unpack("B", raw[1:2])[0]
-        rtt_us = struct.unpack("I", raw[76:80])[0]
-        return {"rtt_ms": round(rtt_us / 1000.0, 2), "mss": mss,
+        retransmits = struct.unpack("B", raw[2:3])[0]
+        rtt_us = struct.unpack("I", raw[68:72])[0]
+        rtt_ms = plausible_rtt_ms(round(rtt_us / 1000.0, 2))
+        return {"rtt_ms": rtt_ms, "mss": mss,
                 "retransmits": retransmits, "source": "TCP_INFO"}
     except (AttributeError, OSError, struct.error):
         pass
 
-    # macOS: TCP_CONNECTION_INFO (0x106). tcpi_srtt is in milliseconds at offset 32.
+    # macOS tcp_connection_info: tcpi_srtt is a u32 of milliseconds at offset 44.
     try:
         raw = sock.getsockopt(socket.IPPROTO_TCP, 0x106, 104)
-        srtt_ms = struct.unpack("I", raw[32:36])[0]
-        return {"rtt_ms": float(srtt_ms), "mss": mss,
+        srtt_ms = struct.unpack("I", raw[44:48])[0]
+        rtt_ms = plausible_rtt_ms(float(srtt_ms))
+        return {"rtt_ms": rtt_ms, "mss": mss,
                 "retransmits": None, "source": "TCP_CONNECTION_INFO"}
     except (OSError, struct.error):
         pass
