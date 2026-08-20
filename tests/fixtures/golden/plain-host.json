@@ -158,6 +158,11 @@
     },
     {
       "severity": "warn",
+      "section": "tls",
+      "text": "the presented issuer is not listed in the zone's CAA records"
+    },
+    {
+      "severity": "warn",
       "section": "http",
       "text": "redirect hop http://plain.example.net/ travelled in plaintext before the upgrade"
     },
@@ -296,7 +301,7 @@
     "chain": [
       {
         "subject_cn": "plain.example.net",
-        "issuer_cn": "R3",
+        "issuer_cn": "DigiCert Global G2",
         "not_before": "2026-06-01T00:00:00+00:00",
         "not_after": "2026-08-30T00:00:00+00:00",
         "days_left": 10,
@@ -316,8 +321,8 @@
         "is_ca": false
       },
       {
-        "subject_cn": "R3",
-        "issuer_cn": "ISRG Root X1",
+        "subject_cn": "DigiCert Global G2",
+        "issuer_cn": "DigiCert Global Root G2",
         "not_before": "2024-03-13T00:00:00+00:00",
         "not_after": "2027-03-13T00:00:00+00:00",
         "days_left": 205,
@@ -334,9 +339,9 @@
         "is_ca": true
       }
     ],
-    "trust_root": "R3",
+    "trust_root": "DigiCert Global G2",
     "verified": true,
-    "caa_match": true,
+    "caa_match": false,
     "resumption": {
       "tested": false
     },
@@ -363,6 +368,10 @@
         [
           "content-type",
           "text/html; charset=utf-8"
+        ],
+        [
+          "content-encoding",
+          "gzip"
         ],
         [
           "cache-control",

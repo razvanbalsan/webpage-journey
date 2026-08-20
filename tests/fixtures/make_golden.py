@@ -21,7 +21,8 @@ def ctx_for(host, tools):
 def collectors(cdn=True, with_path=True, with_local=True):
     def local(ctx):
         if not with_local:
-            return schema.unobserved("neither route nor ip is on PATH")
+            return schema.unobserved(
+                "neither route nor ip is on PATH — cannot find the egress interface")
         return schema.observed(
             interface="en0", link="active", mtu=1500,
             local_ip="192.168.1.23", local_mac="aa:bb:cc:dd:ee:ff",
@@ -64,22 +65,37 @@ def collectors(cdn=True, with_path=True, with_local=True):
         # dns.alpn_advertised instead. The chain has a leaf and its issuing
         # intermediate, matching what -showcerts / get_verified_chain() actually
         # return, so trust_root (computed from chain[-1]) is populated for real.
+        #
+        # caa_match is derived by hand here (the fake collector doesn't call
+        # caa_allows()), so it must agree with what that function actually
+        # returns for this chain's issuer_cn against the CAA record below
+        # ('0 issue "letsencrypt.org"'). A bare CA code like "R3" does NOT
+        # satisfy caa_allows("R3") — verified by calling it directly — so the
+        # healthy fixtures use an issuer_cn that genuinely contains the CAA
+        # domain, and plain-host.json deliberately uses a mismatched issuer
+        # to demonstrate the resulting warn note.
+        if cdn:
+            issuer_cn, intermediate_issuer_cn = "R3 (letsencrypt.org)", "ISRG Root X1"
+            caa_match = True
+        else:
+            issuer_cn, intermediate_issuer_cn = "DigiCert Global G2", "DigiCert Global Root G2"
+            caa_match = False
         return schema.observed(
             version="TLSv1.3", cipher="TLS_AES_128_GCM_SHA256",
             alpn="http/1.1", handshake_ms=38.2,
-            chain=[{"subject_cn": ctx.host, "issuer_cn": "R3",
+            chain=[{"subject_cn": ctx.host, "issuer_cn": issuer_cn,
                     "not_before": "2026-06-01T00:00:00+00:00",
                     "not_after": "2026-08-30T00:00:00+00:00", "days_left": 10,
                     "key": {"type": "EC", "bits": 256}, "sig_algo": "ecdsa-with-SHA256",
                     "sans": [ctx.host, f"www.{ctx.host}"], "scts": 2,
                     "ocsp": ["http://r3.o.lencr.org"], "is_ca": False},
-                   {"subject_cn": "R3", "issuer_cn": "ISRG Root X1",
+                   {"subject_cn": issuer_cn, "issuer_cn": intermediate_issuer_cn,
                     "not_before": "2024-03-13T00:00:00+00:00",
                     "not_after": "2027-03-13T00:00:00+00:00", "days_left": 205,
                     "key": {"type": "RSA", "bits": 2048}, "sig_algo": "sha256WithRSAEncryption",
                     "sans": [], "scts": 0,
                     "ocsp": ["http://x1.i.lencr.org/"], "is_ca": True}],
-            trust_root="R3", verified=True, caa_match=True,
+            trust_root=issuer_cn, verified=True, caa_match=caa_match,
             resumption={"tested": False}, legacy_versions_accepted=[])
 
     def http(ctx):
@@ -112,7 +128,11 @@ def collectors(cdn=True, with_path=True, with_local=True):
             redirect_limit_reached=False,
             final={"url": f"https://{ctx.host}/", "status": 200, "reason": "OK",
                    "protocol": "HTTP/1.1",
+                   # decode_body() derives encoding solely from Content-Encoding
+                   # (wj/collect/http.py) — this header must be present for the
+                   # encoding/ratio/byte counts below to be reachable at all.
                    "headers": [["content-type", "text/html; charset=utf-8"],
+                               ["content-encoding", "gzip"],
                                ["cache-control", "max-age=300"]],
                    "ttfb_ms": 88.0, "total_ms": 109.0, "wire_bytes": 14000,
                    "decoded_bytes": 61000, "encoding": "gzip", "ratio": 4.36,

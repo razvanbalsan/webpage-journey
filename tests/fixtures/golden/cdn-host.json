@@ -294,7 +294,7 @@
     "chain": [
       {
         "subject_cn": "example.com",
-        "issuer_cn": "R3",
+        "issuer_cn": "R3 (letsencrypt.org)",
         "not_before": "2026-06-01T00:00:00+00:00",
         "not_after": "2026-08-30T00:00:00+00:00",
         "days_left": 10,
@@ -314,7 +314,7 @@
         "is_ca": false
       },
       {
-        "subject_cn": "R3",
+        "subject_cn": "R3 (letsencrypt.org)",
         "issuer_cn": "ISRG Root X1",
         "not_before": "2024-03-13T00:00:00+00:00",
         "not_after": "2027-03-13T00:00:00+00:00",
@@ -332,7 +332,7 @@
         "is_ca": true
       }
     ],
-    "trust_root": "R3",
+    "trust_root": "R3 (letsencrypt.org)",
     "verified": true,
     "caa_match": true,
     "resumption": {
@@ -361,6 +361,10 @@
         [
           "content-type",
           "text/html; charset=utf-8"
+        ],
+        [
+          "content-encoding",
+          "gzip"
         ],
         [
           "cache-control",
