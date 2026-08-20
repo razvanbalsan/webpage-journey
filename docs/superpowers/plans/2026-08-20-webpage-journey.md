@@ -1544,6 +1544,11 @@ git commit -m "feat: TCP collector with Happy Eyeballs and kernel connection inf
 - Produces:
   - `summarise_cert(der: bytes) -> dict` → `{"subject_cn", "issuer_cn", "not_before", "not_after", "days_left", "key": {"type", "bits"}, "sig_algo", "sans": list[str], "scts": int, "ocsp": list[str], "is_ca": bool}`
   - `caa_allows(caa_records: list[dict], issuer_cn: str) -> bool | None`
+    **Amended during implementation (Task 7).** The draft's brand-substring fallback compared raw
+    lowercased strings, so `caa_allows(…, "R3 (Let's Encrypt)")` returned `False` where the task's own
+    test asserts `None` — the apostrophe and space break the match against `letsencrypt`. Both sides of
+    that fallback are now normalised to alphanumerics. The exact-match `True` branch is untouched, so
+    the change can only soften a `False` into a `None`, never inflate anything into a `True`.
   - `grade_expiry(days_left: int) -> tuple[str, str] | None` → `(severity, message)` or `None` when healthy
   - `collect(ctx) -> dict`
 
