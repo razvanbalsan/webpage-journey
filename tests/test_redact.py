@@ -1,7 +1,7 @@
 import copy
 import json
 
-from wj import redact
+from wj import redact, schema
 
 
 def sample_trace():
@@ -93,6 +93,30 @@ def test_no_private_identifier_survives_serialisation():
     # Public facts are measurements worth keeping.
     assert "93.184.216.34" in blob
     assert "1.1.1.1" in blob
+
+
+def test_osi_narrative_does_not_republish_what_was_just_redacted():
+    # The real pipeline builds trace["osi"] from local/tcp/dns/path *before*
+    # redaction runs (wj.run.orchestrate), baking raw facts into free-text
+    # strings. A regression here previously let the MAC/IP addresses leak
+    # back out through osi.l2/l3 even though the structured sections and
+    # "redacted: true" said otherwise.
+    trace = sample_trace()
+    trace["target"] = {"input": "https://example.com/", "host": "example.com",
+                        "scheme": "https", "port": 443, "path": "/"}
+    trace["osi"] = schema.build_osi(trace)
+    assert "aa:bb:cc:dd:ee:ff" in json.dumps(trace["osi"])  # sanity: fixture exercises the leak path
+
+    out = redact.redact_trace(trace)
+    blob = json.dumps(out["osi"])
+
+    for leaked in ("aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66",
+                   "192.168.1.23", "192.168.1.1", "81.180.20.7"):
+        assert leaked not in blob, leaked
+
+    assert redact.REDACTED in blob
+    # Public facts are still worth keeping in the narrative.
+    assert "93.184.216.34" in blob
 
 
 def test_a_malformed_hop_address_is_redacted_rather_than_published():

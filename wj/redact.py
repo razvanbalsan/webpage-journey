@@ -3,6 +3,8 @@
 import copy
 import ipaddress
 
+from wj import schema
+
 REDACTED = "[redacted at export]"
 
 LOCAL_FIELDS = ("local_ip", "local_mac", "gateway_ip", "gateway_mac", "public_ip")
@@ -59,5 +61,12 @@ def redact_trace(trace):
                 REDACTED if _identifies_operator(s) else s
                 for s in resolver["servers"]
             ]
+
+    # The OSI narrative is assembled from the same local/tcp/dns/path facts
+    # above, but as free-text strings baked in at orchestration time — before
+    # any redaction ran. Rebuilding it here, from the now-redacted sections,
+    # is the only way to keep it from re-publishing what was just stripped.
+    if out.get("osi"):
+        out["osi"] = schema.build_osi(out)
 
     return out
