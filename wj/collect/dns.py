@@ -1,4 +1,12 @@
-"""Layer 7 riding on 4 and 3: what the name resolves to, and how that answer was found."""
+"""Layer 7 riding on 4 and 3: what the name resolves to, and how that answer was found.
+
+`records_failed` in the collected section lists record types whose query did not
+complete (timeout, SERVFAIL, or another resolver error) -- for those types
+`records[rtype]` is `[]`, but that empty list means "unknown", not "this domain
+publishes no records of this type". Only a genuine NoAnswer response -- the name
+exists and this record type is confirmed absent -- produces an empty list that is
+not also listed in `records_failed`.
+"""
 
 import platform
 import re
@@ -115,8 +123,10 @@ def _dnspython_query(ctx):
             answer = resolver.resolve(name, rtype)
         except dns.resolver.NXDOMAIN as exc:
             raise LookupError(f"NXDOMAIN for {name}") from exc
+        except dns.resolver.NoAnswer:
+            return [], None          # the name exists; this record type does not
         except Exception:
-            return [], None
+            return None, None        # the query failed — that is not the same as absence
         ad = bool(answer.response.flags & dns.flags.AD)
         ttl = answer.rrset.ttl if answer.rrset is not None else 0
         return [{"data": str(r).strip('"'), "ttl": ttl} for r in answer], ad
@@ -157,14 +167,19 @@ def collect(ctx, query=None, delegation=None, resolvers=None):
     resolvers = resolvers or system_resolvers
 
     records = {}
-    ad_flags = []
+    failed = []
+    dnssec_flag = None
     cold_start = time.perf_counter()
     try:
         for rtype in RECORD_TYPES:
             found, ad = query(ctx.host, rtype)
+            if found is None:
+                records[rtype] = []
+                failed.append(rtype)
+                continue
             records[rtype] = found
-            if ad is not None:
-                ad_flags.append(ad)
+            if ad is not None and rtype in ("A", "AAAA") and dnssec_flag is None:
+                dnssec_flag = ad
     except LookupError as exc:
         return unobserved(str(exc))
     cold_ms = round((time.perf_counter() - cold_start) * 1000, 1)
@@ -187,8 +202,9 @@ def collect(ctx, query=None, delegation=None, resolvers=None):
 
     return observed(
         records=records,
+        records_failed=failed,
         resolver={"servers": servers, "source": source},
-        dnssec=classify_dnssec(ad_flags[0] if ad_flags else None, True),
+        dnssec=classify_dnssec(dnssec_flag, True),
         delegation=delegation(ctx.host),
         alpn_advertised=https_info["alpn"],
         ech=https_info["ech"],

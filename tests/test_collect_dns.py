@@ -103,3 +103,32 @@ def test_collect_marks_unobserved_when_nothing_resolves():
 def test_collect_without_dnspython_says_so():
     section = dns_collect.collect(make_ctx(has_dnspython=False))
     assert section == {"observed": False, "why_not": "dnspython not installed"}
+
+
+def test_collect_records_a_failed_query_separately_from_an_absent_record():
+    def query(name, rtype):
+        if rtype == "A":
+            return [{"data": "93.184.216.34", "ttl": 300}], True
+        if rtype == "CAA":
+            return None, None          # query failed
+        return [], False               # genuinely absent
+
+    section = dns_collect.collect(make_ctx(), query=query,
+                                  delegation=lambda host: [], resolvers=lambda: ([], "none"))
+    assert section["records"]["CAA"] == []
+    assert "CAA" in section["records_failed"]
+    assert "MX" not in section["records_failed"]
+
+
+def test_dnssec_verdict_comes_from_the_address_records_only():
+    def query(name, rtype):
+        if rtype == "A":
+            return None, None          # the A query failed
+        if rtype == "AAAA":
+            return [{"data": "2606:2800::1", "ttl": 300}], False
+        return [], True                # a later type reports AD — must not be used
+
+    section = dns_collect.collect(make_ctx(), query=query,
+                                  delegation=lambda host: [], resolvers=lambda: ([], "none"))
+    assert section["dnssec"] == "insecure"
+    assert section["records_failed"] == ["A"]
