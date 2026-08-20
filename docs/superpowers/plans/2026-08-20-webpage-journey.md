@@ -1297,6 +1297,15 @@ git commit -m "feat: DNS collector with TTLs, delegation walk, DNSSEC and HTTPS 
 
   `collect` stores the live socket on the returned dict under the key `"_socket"`, which the orchestrator hands to the TLS and HTTP collectors and strips before export.
 
+  **Amended during implementation (Task 6 review, fix round 1).** The struct offsets in
+  `read_kernel_info` were wrong and are corrected: macOS `tcpi_srtt` is a u32 of milliseconds at
+  **offset 44** (offset 32, which the draft used, is `tcpi_snd_sbbytes` — proved empirically by
+  sending 200,000 bytes and watching that word read back exactly 200000); Linux `tcpi_retransmits`
+  is at **offset 2** and `tcpi_rtt` at **offset 68** in microseconds. A pure
+  `plausible_rtt_ms(value)` guard (`IMPLAUSIBLE_RTT_MS = 60_000`) now filters both branches, so an
+  offset that drifts on a future kernel yields an absent RTT rather than a wrong one — the Linux
+  branch cannot be executed on a Darwin machine, and an unverifiable offset must fail toward absent.
+
 - [ ] **Step 1: Write the failing test**
 
 Create `tests/test_collect_tcp.py`:
