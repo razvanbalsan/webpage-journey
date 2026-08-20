@@ -120,6 +120,51 @@ def test_collect_records_a_failed_query_separately_from_an_absent_record():
     assert "MX" not in section["records_failed"]
 
 
+def test_render_rdata_leaves_caa_quoting_intact():
+    # C2: str(r).strip('"') used to remove the TRAILING quote off a value that
+    # does not begin with one -- '0 issue "digicert.com"' -> '0 issue "digicert.com'
+    # (unterminated). caa_allows()'s own regex requires the closing quote, so
+    # the corruption silently zeroed out every CAA match in production.
+    class FakeCaaRdata:
+        def __str__(self):
+            return '0 issue "digicert.com"'
+
+    assert dns_collect.render_rdata(FakeCaaRdata(), "CAA") == '0 issue "digicert.com"'
+
+
+def test_render_rdata_leaves_soa_and_other_types_untouched():
+    class FakeSoaRdata:
+        def __str__(self):
+            return "ns1.example.net. hostmaster.example.net. 1 7200 900 1209600 86400"
+
+    text = str(FakeSoaRdata())
+    assert dns_collect.render_rdata(FakeSoaRdata(), "SOA") == text
+
+
+def test_render_rdata_rejoins_multi_string_txt_without_a_separator():
+    # A multi-string TXT value must be concatenated with NO separator (RFC
+    # 7208/6376) -- the split only happened because one DNS character-string
+    # maxes out at 255 bytes, and rejoining with a space or a stray quote
+    # corrupts a token that was split mid-way (here, an IPv4 address, verified
+    # live against github.com's real SPF record on 2026-08-20).
+    class FakeTxtRdata:
+        strings = (b"v=spf1 ip4:192.30.252.0/22 ip4:62.253.2", b"27.114 ~all")
+
+        def __str__(self):
+            return '"v=spf1 ip4:192.30.252.0/22 ip4:62.253.2" "27.114 ~all"'
+
+    assert (dns_collect.render_rdata(FakeTxtRdata(), "TXT") ==
+            "v=spf1 ip4:192.30.252.0/22 ip4:62.253.227.114 ~all")
+
+
+def test_render_rdata_txt_without_strings_falls_back_to_str():
+    class FakeTxtRdataNoStrings:
+        def __str__(self):
+            return '"already fine"'
+
+    assert dns_collect.render_rdata(FakeTxtRdataNoStrings(), "TXT") == '"already fine"'
+
+
 def test_dnssec_verdict_comes_from_the_address_records_only():
     def query(name, rtype):
         if rtype == "A":

@@ -108,6 +108,25 @@ def walk_delegation(host, query_at, root_ip=ROOT_SERVER_IP):
     return walk
 
 
+def render_rdata(rdata, rtype):
+    """Render one answer's rdata to the string the trace document stores.
+
+    str(rdata) is correct for every record type except TXT: a TXT value is one
+    or more DNS character-strings, dnspython renders each in its own quotes
+    ('"first" "second"'), and a blanket str(rdata).strip('"') only strips
+    whichever quote happens to sit at the very start/end of that whole
+    rendering -- corrupting single-quoted values (CAA's issue "digicert.com"
+    loses its close quote) and mangling multi-string TXT values mid-way
+    through. The rule for TXT is to concatenate the strings with no separator
+    (RFC 7208/6376): a value that was split only because one DNS
+    character-string maxes out at 255 bytes must be rejoined exactly, not
+    space-joined or quote-stripped.
+    """
+    if rtype == "TXT" and hasattr(rdata, "strings"):
+        return "".join(s.decode("utf-8", "replace") for s in rdata.strings)
+    return str(rdata)
+
+
 def _dnspython_query(ctx):
     import dns.flags
     import dns.resolver
@@ -129,7 +148,7 @@ def _dnspython_query(ctx):
             return None, None        # the query failed — that is not the same as absence
         ad = bool(answer.response.flags & dns.flags.AD)
         ttl = answer.rrset.ttl if answer.rrset is not None else 0
-        return [{"data": str(r).strip('"'), "ttl": ttl} for r in answer], ad
+        return [{"data": render_rdata(r, rtype), "ttl": ttl} for r in answer], ad
 
     return query
 

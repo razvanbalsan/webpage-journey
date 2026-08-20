@@ -32,6 +32,10 @@ def summarise_cert(der, now=None):
         org = name.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)
         return org[0].value if org else None
 
+    def organization(name):
+        values = name.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)
+        return values[0].value if values else None
+
     key = cert.public_key()
     if isinstance(key, rsa.RSAPublicKey):
         key_info = {"type": "RSA", "bits": key.key_size}
@@ -75,6 +79,7 @@ def summarise_cert(der, now=None):
     return {
         "subject_cn": common_name(cert.subject),
         "issuer_cn": common_name(cert.issuer),
+        "issuer_org": organization(cert.issuer),
         "not_before": cert.not_valid_before_utc.isoformat(),
         "not_after": not_after.isoformat(),
         "days_left": (not_after - now).days,
@@ -87,9 +92,18 @@ def summarise_cert(der, now=None):
     }
 
 
-def caa_allows(caa_records, issuer_cn):
-    """True/False when CAA is published and comparable, None when it cannot be judged."""
-    if not caa_records or not issuer_cn:
+def caa_allows(caa_records, issuer_cn, issuer_org=None):
+    """True/False when CAA is published and comparable, None when it cannot be judged.
+
+    Many real issuer Common Names are bare CA codes with no resemblance to a
+    domain at all ("R11", "WE1", "GTS CA 1C3" — cryptography's common_name()
+    only falls back to Organization when the CN is entirely absent, and a CA
+    almost always sets both). Judging those against a CAA domain by substring
+    match produces confident False positives, not honest unknowns, so both the
+    CN and the Organization are considered, and a haystack with no comparable
+    word-like token is refused outright rather than silently judged.
+    """
+    if not caa_records or not (issuer_cn or issuer_org):
         return None
     issuers = []
     for record in caa_records:
@@ -98,14 +112,28 @@ def caa_allows(caa_records, issuer_cn):
             issuers.append(match.group(1).lower())
     if not issuers:
         return None
-    haystack = issuer_cn.lower()
+    haystack = " ".join(p for p in (issuer_cn, issuer_org) if p).lower()
+    if not re.search(r"[a-z]{3,}", haystack):
+        return None  # a bare CA code ("R11", "WE1") is not comparable to a domain
     if any(i in haystack for i in issuers):
         return True
-    # A CA's issuer_cn (e.g. "R3 (Let's Encrypt)") rarely spells its CAA domain
-    # (e.g. "letsencrypt.org") verbatim, so compare on alphanumerics only.
+    # A CA's issuer_cn/issuer_org (e.g. "Let's Encrypt") rarely spells its CAA
+    # domain (e.g. "letsencrypt.org") verbatim, so compare on alphanumerics only
+    # — and check every label of the domain, not only the first. Google Trust
+    # Services' CAA domain is "pki.goog": the brand is the SECOND label, not the
+    # first ("pki"), and a first-label-only check returns a false "False" against
+    # a real, live "Google Trust Services"-issued certificate (verified against
+    # google.com). "com"/"org"/"net"/"www" are excluded as too generic to prove
+    # anything on their own.
     normalized_haystack = re.sub(r"[^a-z0-9]", "", haystack)
-    brands = [re.sub(r"[^a-z0-9]", "", i.split(".")[0]) for i in issuers]
-    if any(brand and brand in normalized_haystack for brand in brands):
+    generic_labels = {"com", "org", "net", "co", "www"}
+    brands = []
+    for i in issuers:
+        for label in i.split("."):
+            label = re.sub(r"[^a-z0-9]", "", label)
+            if label and label not in generic_labels and label not in brands:
+                brands.append(label)
+    if any(brand in normalized_haystack for brand in brands):
         return None  # plausible match on the brand alone — not proof either way
     return False
 
@@ -175,6 +203,7 @@ def collect(ctx):
 
     caa_records = ctx.results.get("dns", {}).get("records", {}).get("CAA", [])
     issuer = chain[0]["issuer_cn"] if chain else None
+    issuer_org = chain[0].get("issuer_org") if chain else None
 
     section = observed(
         version=tls_sock.version(),
@@ -184,7 +213,7 @@ def collect(ctx):
         chain=chain,
         trust_root=chain[-1]["subject_cn"] if len(chain) > 1 else None,
         verified=True,
-        caa_match=caa_allows(caa_records, issuer),
+        caa_match=caa_allows(caa_records, issuer, issuer_org),
         resumption={"tested": False},
         legacy_versions_accepted=[],
     )
