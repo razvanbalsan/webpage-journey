@@ -118,8 +118,22 @@ def test_a_clean_trace_only_gets_the_alpn_gap_note():
     findings.analyse(trace)
     assert trace["notes"] == [
         {"severity": "info", "section": "tls",
-         "text": "this host advertises h3, h2, but this tool speaks HTTP/1.1 and negotiated http/1.1"},
+         "text": "this host advertises h3, h2, but this tool only offers HTTP/1.1 and negotiated http/1.1"},
     ]
+
+
+def test_alpn_gap_note_does_not_claim_a_negotiation_that_did_not_happen():
+    trace = base_trace()
+    trace["dns"] = {"observed": True, "dnssec": "secure",
+                    "records": {"A": [{"data": "1.2.3.4", "ttl": 300}],
+                                "AAAA": [{"data": "::1", "ttl": 300}]},
+                    "alpn_advertised": ["h2"]}
+    trace["tls"] = {"observed": True, "alpn": None, "chain": [{"days_left": 80}],
+                    "legacy_versions_accepted": []}
+    findings.analyse(trace)
+    joined = " ".join(n["text"] for n in trace["notes"])
+    assert "negotiated http/1.1" not in joined
+    assert "did not negotiate" in joined
 
 
 def test_unobserved_sections_are_skipped_silently():

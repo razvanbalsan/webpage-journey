@@ -154,6 +154,18 @@ def test_nat_true_with_absent_ips_never_fabricates_a_none_fact():
     assert "NAT" not in joined
 
 
+def test_gateway_mac_with_absent_gateway_ip_never_fabricates_a_none_fact():
+    # Same family as the NAT fact above: currently unreachable in practice
+    # (wj/collect/local.py only sets gateway_mac when gateway_ip is truthy),
+    # but build_osi must not fabricate a fact from an absent gateway_ip.
+    trace = full_trace()
+    trace["local"].update(gateway_mac="11:22:33:44:55:66", gateway_ip=None)
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l2"]["facts"])
+    assert "None" not in joined
+    assert "gateway MAC" not in joined
+
+
 def test_all_optional_sub_fields_none_never_prints_the_literal_none():
     trace = full_trace()
     trace["local"].update(link=None, mtu=None, local_ip=None, local_mac=None,

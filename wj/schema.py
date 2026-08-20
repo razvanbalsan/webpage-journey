@@ -111,7 +111,7 @@ def build_osi(trace):
     l2_facts = [
         f"your MAC {local.get('local_mac')}" if local.get("local_mac") else None,
         f"→ gateway MAC {local.get('gateway_mac')} ({local.get('gateway_ip')})"
-        if local.get("gateway_mac") else None,
+        if local.get("gateway_mac") and local.get("gateway_ip") else None,
         "every frame to this server is addressed to your router, not to the server",
     ]
 

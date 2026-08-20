@@ -54,9 +54,14 @@ def _analyse_tls(trace):
     dns = trace.get("dns", {})
     advertised = [p for p in dns.get("alpn_advertised") or [] if p != "http/1.1"]
     if advertised:
+        negotiated = tls.get("alpn")
+        if negotiated:
+            detail = f"and negotiated {negotiated}"
+        else:
+            detail = "and the server did not negotiate an ALPN protocol"
         add_note(trace, "info", "tls",
-                 "this host advertises " + ", ".join(advertised) +
-                 ", but this tool speaks HTTP/1.1 and negotiated http/1.1")
+                 f"this host advertises {', '.join(advertised)}, "
+                 f"but this tool only offers HTTP/1.1 {detail}")
 
 
 def _analyse_http(trace):
