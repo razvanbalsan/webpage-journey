@@ -2422,6 +2422,14 @@ git commit -m "feat: HTTP collector with redirect chain, decoding and security g
 - Consumes: `wj.context.Context`; reads `ctx.results["tcp"]["chosen"]["ip"]`.
 - Produces:
   - `parse_traceroute(text: str) -> list[dict]` → `[{"ttl", "ip", "rdns", "rtt_ms"}]`, unresponsive hops have `ip=None`
+    **Amended during implementation (Task 9, two fix rounds).** The RTT must be searched for ONLY in
+    the part of the line after the matched address, never the whole line: a hostname fragment such as
+    `ae1.msw` or `sw-5ms.` otherwise masquerades as a timing and fabricates a measurement. Tightening
+    the regex's lookaround was tried first and defeated — a hyphen is not `\w`, so the boundary check
+    admitted it. The fix is structural (`tail = rest[addr.end():]`), with
+    `RTT_RE = r"(?:^|\s)(\d+(?:\.\d+)?)\s*ms(?=\s|$|!)"`. `cymru_name` raises `ValueError` for
+    IPv6 rather than returning a nonsense query name, and `collect` selects `traceroute6` for an IPv6
+    target — not an edge case, since Happy Eyeballs usually makes IPv6 win the connection race.
   - `parse_cymru_txt(value: str) -> dict` → `{"asn": int | None, "prefix": str | None, "country": str | None}`
   - `cymru_name(ip: str) -> str` → the reversed-nibble query name for `origin.asn.cymru.com`
   - `asn_path(hops: list[dict]) -> list[int]` — ASNs in order, duplicates collapsed, `None` dropped
