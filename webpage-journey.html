@@ -640,6 +640,38 @@
   .waterfall-svg { display: block; min-width: 420px; }
   .waterfall-svg text { font-size: 11px; fill: var(--text-secondary); }
   .waterfall-svg text.total { fill: var(--text-primary); font-weight: 600; }
+
+  .step-card.failed {
+    border-left-color: var(--critical) !important;
+    box-shadow: 0 0 0 2px var(--critical);
+  }
+  .step-card.unreached { opacity: 0.35; }
+  .step-card.filtered-out { display: none; }
+
+  .failure-banner {
+    display: none;
+    background: var(--card-bg);
+    border: 1px solid var(--critical);
+    border-left: 4px solid var(--critical);
+    border-radius: 4px; padding: 12px 16px; margin-bottom: 18px;
+    font-size: 13px; line-height: 1.55;
+  }
+  .failure-banner.show { display: block; }
+  .failure-banner code {
+    background: var(--surface-1); border: 1px solid var(--border);
+    padding: 1px 5px; border-radius: 3px;
+  }
+  .osi-layer.dimmed { opacity: 0.18; }
+  .osi-layer.failing { box-shadow: 0 0 0 2px var(--critical); opacity: 1; }
+  .filter-note {
+    font-size: 12px; color: var(--text-muted); margin: 8px 0 0;
+  }
+
+  .control-group select {
+    font-family: inherit; font-size: 13px; padding: 6px 8px;
+    background: var(--surface-1); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 4px;
+  }
 </style>
 </head>
 <body>
@@ -671,6 +703,12 @@
       <input type="checkbox" id="httpsToggle" checked>
       Use HTTPS
     </label>
+    <div class="control-group">
+      <label for="failureSelect">Break something:</label>
+      <select id="failureSelect">
+        <option value="">nothing — healthy request</option>
+      </select>
+    </div>
   </div>
   <p class="live-hint">Enter any real domain above and click Go &mdash; DNS records, TTLs, and the resolved IP's network/location are fetched live via public DNS-over-HTTPS resolvers (Google &amp; Cloudflare), not hardcoded. TCP/TLS internals aren't visible to browser JavaScript &mdash; the companion Python script below shows those for real.</p>
 
@@ -693,6 +731,8 @@
     <div class="findings-panel" id="findingsPanel"></div>
     <div class="waterfall-panel" id="waterfallPanel"></div>
   </div>
+
+  <div class="failure-banner" id="failureBanner"></div>
 
   <div class="live-panel" id="livePanel">
     <div class="live-panel-head">
@@ -723,6 +763,7 @@
       <div class="osi-dir"><span>Closest to the user</span><span>Closest to the wire</span></div>
       <div class="osi-stack" id="osiStack"></div>
       <div class="osi-detail" id="osiDetail">Select a layer above, or trigger a step in the journey, to see its explanation here.</div>
+      <p class="filter-note" id="filterNote"></p>
     </aside>
   </div>
 
@@ -1700,6 +1741,7 @@
     btn.innerHTML = '<span>L' + layer.n + ' &middot; ' + layer.name + '</span><span class="n">' + layer.proto + '</span>';
     btn.addEventListener("click", function () {
       showLayerDetail(layer, true);
+      setLayerFilter(state.layerFilter === layer.n ? null : layer.n);
     });
     osiStackEl.appendChild(btn);
     osiButtons[layer.n] = btn;
@@ -1723,6 +1765,32 @@
       var btn = osiButtons[l.n];
       if (btn) btn.classList.add(l.w === "primary" ? "primary" : "secondary");
     });
+  }
+
+  function setLayerFilter(n) {
+    state.layerFilter = n;
+    cardEls.forEach(function (card, idx) {
+      var step = JOURNEY[idx];
+      var matches = n === null || (step.layers || []).some(function (l) {
+        return l.n === n && l.w === "primary";
+      });
+      card.classList.toggle("filtered-out", !matches);
+    });
+
+    Object.keys(osiButtons).forEach(function (num) {
+      osiButtons[num].setAttribute("aria-pressed", Number(num) === n ? "true" : "false");
+    });
+
+    var note = document.getElementById("filterNote");
+    if (n === null) {
+      note.textContent = "";
+    } else {
+      var shown = cardEls.filter(function (c) {
+        return !c.classList.contains("filtered-out");
+      }).length;
+      note.textContent = "Showing the " + shown + " stage(s) where L" + n +
+                         " does the work. Click L" + n + " again to show all.";
+    }
   }
 
   // ---------------- Build step cards ----------------
@@ -1849,6 +1917,105 @@
     });
   }
 
+  // ---------------- Failure-mode simulator ----------------
+  var FAILURES = [
+    {
+      key: "cable", label: "Cable unplugged / Wi-Fi off", layer: 1, stopsAt: "local",
+      browserError: "ERR_INTERNET_DISCONNECTED",
+      command: "ifconfig en0 | grep status   # then: ping your gateway",
+      explain: "Nothing above Layer 1 can run. Every other symptom you might chase — DNS, TLS, 500s — is downstream of a dead link, which is why checking the physical layer first is not a joke."
+    },
+    {
+      key: "nxdomain", label: "DNS name does not exist", layer: 7, stopsAt: "dns",
+      browserError: "DNS_PROBE_FINISHED_NXDOMAIN",
+      command: "dig +short <host>   # empty output means no answer at all",
+      explain: "The network is healthy and the name is not. No connection is ever attempted, so a firewall or certificate is not the cause no matter how it looks."
+    },
+    {
+      key: "blocked", label: "Port 443 blocked by a firewall", layer: 4, stopsAt: "tcp",
+      browserError: "ERR_CONNECTION_TIMED_OUT",
+      command: "nc -vz <host> 443   # hangs, rather than saying 'refused'",
+      explain: "Timed out means dropped silently; refused means something answered and declined. Those two point at completely different causes, and the distinction is the single most useful thing at Layer 4."
+    },
+    {
+      key: "cert", label: "Certificate expired", layer: 6, stopsAt: "tls",
+      browserError: "NET::ERR_CERT_DATE_INVALID",
+      command: "openssl s_client -connect <host>:443 -servername <host> 2>/dev/null | openssl x509 -noout -dates",
+      explain: "TCP succeeded, so the server is reachable and listening. The failure is in validation, not connectivity — and unlike most outages it had a known date in advance."
+    },
+    {
+      key: "gateway", label: "502 from the load balancer", layer: 7, stopsAt: "edge",
+      browserError: "502 Bad Gateway",
+      command: "curl -sSI https://<host>/   # read the Server and Via headers",
+      explain: "The load balancer is healthy enough to answer you; it is the backend behind it that returned nothing usable. Look at application logs and health checks, not at the network."
+    },
+    {
+      key: "js", label: "JavaScript exception on load", layer: null, stopsAt: "interactive",
+      browserError: "Uncaught TypeError in the console",
+      command: "# DevTools → Console, then reload with 'Pause on exceptions' enabled",
+      explain: "Every network layer succeeded — the page arrived intact. This one belongs to no OSI layer at all, which is exactly why reaching for a network diagnosis here wastes time."
+    }
+  ];
+
+  function stepIndexByKey(key) {
+    return JOURNEY.findIndex(function (s) { return s.key === key; });
+  }
+
+  function applyFailure(key) {
+    var failure = FAILURES.find(function (f) { return f.key === key; }) || null;
+    state.failure = failure;
+
+    var banner = document.getElementById("failureBanner");
+    cardEls.forEach(function (c) { c.classList.remove("failed", "unreached"); });
+    Object.keys(osiButtons).forEach(function (n) {
+      osiButtons[n].classList.remove("failing", "dimmed");
+    });
+
+    if (!failure) {
+      banner.classList.remove("show");
+      banner.innerHTML = "";
+      return;
+    }
+
+    var stopIdx = stepIndexByKey(failure.stopsAt);
+    cardEls.forEach(function (card, idx) {
+      if (idx === stopIdx) card.classList.add("failed");
+      else if (idx > stopIdx) card.classList.add("unreached");
+    });
+
+    if (failure.layer) {
+      Object.keys(osiButtons).forEach(function (n) {
+        osiButtons[n].classList.add(Number(n) === failure.layer ? "failing" : "dimmed");
+      });
+    }
+
+    var layerText = failure.layer
+      ? "Layer " + failure.layer + " — " +
+        LAYERS.find(function (l) { return l.n === failure.layer; }).name
+      : "no OSI layer — this is application code";
+
+    banner.classList.add("show");
+    banner.innerHTML =
+      "<strong>" + escapeHtml(failure.label) + "</strong> · " + escapeHtml(layerText) +
+      "<br>What you see: <code>" + escapeHtml(failure.browserError) + "</code>" +
+      "<br>" + escapeHtml(failure.explain) +
+      '<br>Isolate it with: <code>' +
+      escapeHtml(failure.command.replace(/<host>/g, host())) + "</code>" +
+      "<br><span style='color:var(--text-muted)'>Stages after step " +
+      (stopIdx + 1) + " never run.</span>";
+  }
+
+  var failureSelect = document.getElementById("failureSelect");
+  FAILURES.forEach(function (f) {
+    var option = document.createElement("option");
+    option.value = f.key;
+    option.textContent = f.label;
+    failureSelect.appendChild(option);
+  });
+  failureSelect.addEventListener("change", function () {
+    applyFailure(failureSelect.value);
+  });
+
   var REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   function setExpanded(idx, open) {
@@ -1958,6 +2125,7 @@
     var out = [];
     JOURNEY.forEach(function (step, idx) {
       if (step.httpsOnly && !httpsOn) return;
+      if (cardEls[idx].classList.contains("filtered-out")) return;
       out.push(idx);
     });
     return out;
@@ -1981,9 +2149,10 @@
     cardEls[idx].querySelector(".step-head").setAttribute("aria-expanded", "true");
     renderStepBody(cardEls[idx], JOURNEY[idx]);
     setActiveStep(idx, true);
-    cardEls[idx].scrollIntoView({ behavior: "smooth", block: "center" });
+    cardEls[idx].scrollIntoView({
+      behavior: REDUCED_MOTION ? "auto" : "smooth", block: "center" });
     playIdx++;
-    playTimer = setTimeout(stepPlay, 1900);
+    playTimer = setTimeout(stepPlay, REDUCED_MOTION ? 0 : 1900);
   }
 
   goBtn.addEventListener("click", async function () {
@@ -2021,6 +2190,11 @@
     try { localStorage.removeItem(TRACE_STORAGE_KEY); } catch (e) {}
     document.getElementById("tracePanels").classList.remove("show");
     renderTraceBar();
+
+    failureSelect.value = "";
+    applyFailure("");
+    setLayerFilter(null);
+    refreshAllBodies();
   });
 
   // ---------------- Theme toggle ----------------
