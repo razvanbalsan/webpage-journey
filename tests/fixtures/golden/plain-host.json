@@ -1,0 +1,455 @@
+{
+  "schema": "webpage-journey-trace/1",
+  "generated_at": "2026-08-20T09:31:02+00:00",
+  "tool": {
+    "name": "trace.py",
+    "version": "2.0.0"
+  },
+  "target": {
+    "input": "https://plain.example.net/",
+    "host": "plain.example.net",
+    "scheme": "https",
+    "port": 443,
+    "path": "/"
+  },
+  "capabilities": {
+    "privileged": false,
+    "can_sudo": false,
+    "tools": [
+      "arp",
+      "ifconfig",
+      "route",
+      "traceroute"
+    ],
+    "libs": {
+      "dns": true,
+      "cryptography": true,
+      "h2": false
+    },
+    "installed_during_run": []
+  },
+  "redacted": false,
+  "timings": {
+    "waterfall": [
+      {
+        "label": "DNS",
+        "start_ms": 0.0,
+        "end_ms": 41.2
+      },
+      {
+        "label": "TCP",
+        "start_ms": 41.2,
+        "end_ms": 53.6
+      },
+      {
+        "label": "TLS",
+        "start_ms": 53.6,
+        "end_ms": 91.8
+      },
+      {
+        "label": "TTFB",
+        "start_ms": 91.8,
+        "end_ms": 179.8
+      },
+      {
+        "label": "Download",
+        "start_ms": 179.8,
+        "end_ms": 200.8
+      }
+    ],
+    "total_ms": 200.8
+  },
+  "osi": {
+    "l1": {
+      "observed": true,
+      "facts": [
+        "interface en0",
+        "link active",
+        "MTU 1500"
+      ],
+      "why_not": null,
+      "test_command": "ifconfig en0"
+    },
+    "l2": {
+      "observed": true,
+      "facts": [
+        "your MAC aa:bb:cc:dd:ee:ff",
+        "\u2192 gateway MAC 11:22:33:44:55:66 (192.168.1.1)",
+        "every frame to this server is addressed to your router, not to the server"
+      ],
+      "why_not": null,
+      "test_command": "arp -n 192.168.1.1"
+    },
+    "l3": {
+      "observed": true,
+      "facts": [
+        "192.168.1.23 \u2192 104.16.132.229",
+        "NAT: 192.168.1.23 appears as 81.180.20.7",
+        "4 hops",
+        "AS8708 \u2192 AS13335"
+      ],
+      "why_not": null,
+      "test_command": "ping 104.16.132.229"
+    },
+    "l4": {
+      "observed": true,
+      "facts": [
+        "TCP :54213 \u2192 :443",
+        "RTT 12.4 ms",
+        "MSS 1460",
+        "0 retransmits",
+        "ipv4 won the connection race"
+      ],
+      "why_not": null,
+      "test_command": "nc -vz plain.example.net 443"
+    },
+    "l5": {
+      "observed": true,
+      "facts": [
+        "TLS session established",
+        "2 request(s) over this connection"
+      ],
+      "why_not": null,
+      "test_command": null
+    },
+    "l6": {
+      "observed": true,
+      "facts": [
+        "TLSv1.3 \u00b7 TLS_AES_128_GCM_SHA256",
+        "ALPN http/1.1",
+        "gzip: 14000 \u2192 61000 bytes (4.36:1)",
+        "text/html"
+      ],
+      "why_not": null,
+      "test_command": "openssl s_client -connect plain.example.net:443 -servername plain.example.net"
+    },
+    "l7": {
+      "observed": true,
+      "facts": [
+        "HTTP/1.1 \u2192 200",
+        "1 redirect(s) followed",
+        "DNS: plain.example.net \u2192 104.16.132.229",
+        "resolved via 1.1.1.1, DNSSEC insecure"
+      ],
+      "why_not": null,
+      "test_command": "curl -sSI https://plain.example.net/"
+    }
+  },
+  "notes": [
+    {
+      "severity": "info",
+      "section": "dns",
+      "text": "DNSSEC is not signed for this zone \u2014 answers cannot be authenticated"
+    },
+    {
+      "severity": "info",
+      "section": "dns",
+      "text": "no AAAA record \u2014 this host is unreachable over IPv6-only networks"
+    },
+    {
+      "severity": "info",
+      "section": "dns",
+      "text": "no HTTP/3 advertised in the HTTPS record \u2014 clients cannot use QUIC on the first connection"
+    },
+    {
+      "severity": "warn",
+      "section": "tls",
+      "text": "certificate expires in 10 days"
+    },
+    {
+      "severity": "warn",
+      "section": "http",
+      "text": "redirect hop http://plain.example.net/ travelled in plaintext before the upgrade"
+    },
+    {
+      "severity": "warn",
+      "section": "http",
+      "text": "security header grade F \u2014 missing: Strict-Transport-Security, Content-Security-Policy, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, Cross-Origin-Opener-Policy"
+    }
+  ],
+  "local": {
+    "observed": true,
+    "interface": "en0",
+    "link": "active",
+    "mtu": 1500,
+    "local_ip": "192.168.1.23",
+    "local_mac": "aa:bb:cc:dd:ee:ff",
+    "gateway_ip": "192.168.1.1",
+    "gateway_mac": "11:22:33:44:55:66",
+    "dhcp": {
+      "server": "192.168.1.1",
+      "lease_seconds": 86400,
+      "dns": [
+        "192.168.1.1"
+      ]
+    },
+    "public_ip": "81.180.20.7",
+    "nat": true
+  },
+  "dns": {
+    "observed": true,
+    "records": {
+      "A": [
+        {
+          "data": "104.16.132.229",
+          "ttl": 300
+        }
+      ],
+      "AAAA": [],
+      "CNAME": [],
+      "MX": [],
+      "NS": [
+        {
+          "data": "ns1.example.net",
+          "ttl": 3600
+        }
+      ],
+      "TXT": [
+        {
+          "data": "v=spf1 -all",
+          "ttl": 3600
+        }
+      ],
+      "SOA": [],
+      "CAA": [
+        {
+          "data": "0 issue \"letsencrypt.org\"",
+          "ttl": 3600
+        }
+      ],
+      "HTTPS": []
+    },
+    "records_failed": [],
+    "resolver": {
+      "servers": [
+        "1.1.1.1"
+      ],
+      "source": "scutil"
+    },
+    "dnssec": "insecure",
+    "delegation": [
+      {
+        "level": "root",
+        "server": "198.41.0.4",
+        "referral": [
+          "a.gtld-servers.net"
+        ],
+        "answer": []
+      },
+      {
+        "level": "tld",
+        "server": "192.5.6.30",
+        "referral": [
+          "ns1.example.net"
+        ],
+        "answer": []
+      },
+      {
+        "level": "authoritative",
+        "server": "203.0.113.9",
+        "referral": [],
+        "answer": [
+          "ns1.example.net"
+        ]
+      }
+    ],
+    "alpn_advertised": [],
+    "ech": false,
+    "timing_ms": {
+      "cold": 41.2,
+      "warm": 1.1
+    }
+  },
+  "tcp": {
+    "observed": true,
+    "candidates": [
+      {
+        "ip": "104.16.132.229",
+        "family": "ipv4",
+        "connect_ms": 12.4,
+        "error": null
+      }
+    ],
+    "chosen": {
+      "ip": "104.16.132.229",
+      "family": "ipv4",
+      "port": 443
+    },
+    "winner_family": "ipv4",
+    "local": {
+      "ip": "192.168.1.23",
+      "port": 54213
+    },
+    "kernel": {
+      "rtt_ms": 12.4,
+      "mss": 1460,
+      "retransmits": 0,
+      "source": "TCP_INFO"
+    }
+  },
+  "tls": {
+    "observed": true,
+    "version": "TLSv1.3",
+    "cipher": "TLS_AES_128_GCM_SHA256",
+    "alpn": "http/1.1",
+    "handshake_ms": 38.2,
+    "chain": [
+      {
+        "subject_cn": "plain.example.net",
+        "issuer_cn": "R3",
+        "not_before": "2026-06-01T00:00:00+00:00",
+        "not_after": "2026-08-30T00:00:00+00:00",
+        "days_left": 10,
+        "key": {
+          "type": "EC",
+          "bits": 256
+        },
+        "sig_algo": "ecdsa-with-SHA256",
+        "sans": [
+          "plain.example.net",
+          "www.plain.example.net"
+        ],
+        "scts": 2,
+        "ocsp": [
+          "http://r3.o.lencr.org"
+        ],
+        "is_ca": false
+      },
+      {
+        "subject_cn": "R3",
+        "issuer_cn": "ISRG Root X1",
+        "not_before": "2024-03-13T00:00:00+00:00",
+        "not_after": "2027-03-13T00:00:00+00:00",
+        "days_left": 205,
+        "key": {
+          "type": "RSA",
+          "bits": 2048
+        },
+        "sig_algo": "sha256WithRSAEncryption",
+        "sans": [],
+        "scts": 0,
+        "ocsp": [
+          "http://x1.i.lencr.org/"
+        ],
+        "is_ca": true
+      }
+    ],
+    "trust_root": "R3",
+    "verified": true,
+    "caa_match": true,
+    "resumption": {
+      "tested": false
+    },
+    "legacy_versions_accepted": []
+  },
+  "http": {
+    "observed": true,
+    "hops": [
+      {
+        "url": "http://plain.example.net/",
+        "status": 301,
+        "location": "https://plain.example.net/",
+        "protocol": "HTTP/1.1",
+        "ttfb_ms": 40.1
+      }
+    ],
+    "redirect_limit_reached": false,
+    "final": {
+      "url": "https://plain.example.net/",
+      "status": 200,
+      "reason": "OK",
+      "protocol": "HTTP/1.1",
+      "headers": [
+        [
+          "content-type",
+          "text/html; charset=utf-8"
+        ],
+        [
+          "cache-control",
+          "max-age=300"
+        ]
+      ],
+      "ttfb_ms": 88.0,
+      "total_ms": 109.0,
+      "wire_bytes": 14000,
+      "decoded_bytes": 61000,
+      "encoding": "gzip",
+      "ratio": 4.36,
+      "content_type": "text/html"
+    },
+    "cache": {
+      "state": null,
+      "age": null,
+      "header": null,
+      "directives": "max-age=300"
+    },
+    "cdn": null,
+    "security": {
+      "grade": "F",
+      "present": {},
+      "missing": [
+        "Strict-Transport-Security",
+        "Content-Security-Policy",
+        "X-Content-Type-Options",
+        "Referrer-Policy",
+        "Permissions-Policy",
+        "Cross-Origin-Opener-Policy"
+      ],
+      "cookies": [
+        {
+          "name": "session",
+          "secure": true,
+          "httponly": true,
+          "samesite": "Lax"
+        }
+      ],
+      "scheme": "https"
+    },
+    "conditional": {
+      "tested": false
+    }
+  },
+  "path": {
+    "observed": true,
+    "source": "traceroute",
+    "hops": [
+      {
+        "ttl": 1,
+        "ip": "192.168.1.1",
+        "rdns": "router.lan",
+        "rtt_ms": 1.2,
+        "asn": null,
+        "as_name": null
+      },
+      {
+        "ttl": 2,
+        "ip": null,
+        "rdns": null,
+        "rtt_ms": null,
+        "asn": null,
+        "as_name": null
+      },
+      {
+        "ttl": 3,
+        "ip": "203.0.113.9",
+        "rdns": "ae-1.border.example.net",
+        "rtt_ms": 14.5,
+        "asn": 8708,
+        "as_name": "203.0.113.0/24"
+      },
+      {
+        "ttl": 4,
+        "ip": "104.16.132.229",
+        "rdns": null,
+        "rtt_ms": 15.0,
+        "asn": 13335,
+        "as_name": "104.16.0.0/12"
+      }
+    ],
+    "asn_path": [
+      8708,
+      13335
+    ],
+    "path_mtu": null
+  }
+}
