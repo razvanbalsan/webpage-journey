@@ -3136,6 +3136,15 @@ git commit -m "feat: local network collector exposing L1/L2 for the first time"
 - Produces:
   - `redact.REDACTED: str = "[redacted at export]"`
   - `redact.redact_trace(trace: dict) -> dict` — returns a deep-copied, redacted document with `redacted: True`
+    **Amended during implementation (Task 11).** Two leaks were found and closed. `dns.resolver.servers`
+    is now redacted per entry — a private resolver is usually the same router IP `local.gateway_ip`
+    hides, while a public one (`1.1.1.1`) is a real measurement worth keeping. And redaction now fails
+    CLOSED via its own `_identifies_operator(value)` predicate: anything not provably public and
+    globally routable is redacted, including values `ipaddress` cannot parse. That is deliberately the
+    opposite polarity from `collect.local.is_private`, where an unparseable address should simply not
+    count toward the NAT determination — so the two do not share a predicate. The test fixture was also
+    extended to populate every section, because the serialized-JSON leak test is only ever as good as
+    the fixture behind it, and the original covered three sections of six.
   - `findings.analyse(trace: dict) -> None` — appends notes in place, using `schema.add_note`
 
 - [ ] **Step 1: Write the failing redaction test**
