@@ -65,7 +65,7 @@ def test_is_private_covers_cgnat_and_link_local():
     # The stdlib's is_private() returns False for 100.64.0.0/10, so a CGNAT
     # host would otherwise be reported as not NAT'd.
     assert local_collect.is_private("100.64.0.1") is True
-    assert local_collect.is_private("100.100.1.1") is True
+    assert local_collect.is_private("100.127.255.254") is True
     assert local_collect.is_private("169.254.10.1") is True
     assert local_collect.is_private("fd00::1") is True
     assert local_collect.is_private("2606:4700::1111") is False
