@@ -356,7 +356,6 @@
     border-left: 4px solid var(--gridline);
     border-radius: 4px;
     padding: 14px 16px;
-    cursor: pointer;
     transition: border-color 0.25s ease, box-shadow 0.25s ease;
   }
   .step-card.has-layer { border-left-color: var(--step-color, var(--gridline)); }
@@ -1186,8 +1185,12 @@
       return;
     }
     var idx = indices[playIdx];
-    cardEls.forEach(function (c) { c.classList.remove("expanded"); });
+    cardEls.forEach(function (c) {
+      c.classList.remove("expanded");
+      c.querySelector(".step-head").setAttribute("aria-expanded", "false");
+    });
     cardEls[idx].classList.add("expanded");
+    cardEls[idx].querySelector(".step-head").setAttribute("aria-expanded", "true");
     renderStepBody(cardEls[idx], JOURNEY[idx]);
     setActiveStep(idx, true);
     cardEls[idx].scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1215,7 +1218,10 @@
     playIdx = 0;
     goBtn.disabled = false;
     goBtn.textContent = "Go →";
-    cardEls.forEach(function (c) { c.classList.remove("expanded", "active-step"); });
+    cardEls.forEach(function (c) {
+      c.classList.remove("expanded", "active-step");
+      c.querySelector(".step-head").setAttribute("aria-expanded", "false");
+    });
     highlightLayers([]);
     setTrack(null);
     osiDetailEl.textContent = "Select a layer above, or trigger a step in the journey, to see its explanation here.";
