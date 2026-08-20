@@ -555,6 +555,34 @@
     padding: 0; margin: -1px; overflow: hidden;
     clip: rect(0 0 0 0); white-space: nowrap; border: 0;
   }
+
+  .prov { font-size: 10px; margin-left: 5px; vertical-align: 1px; cursor: help; }
+  .prov-measured    { color: var(--good); }
+  .prov-live        { color: var(--l7-accent); }
+  .prov-illustrative{ color: var(--text-muted); }
+  .prov-redacted    { color: var(--warn); }
+
+  .prov-legend {
+    display: flex; flex-wrap: wrap; gap: 14px;
+    font-size: 12px; color: var(--text-muted); margin: 0 0 18px;
+  }
+
+  .trace-bar {
+    display: none;
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-left: 4px solid var(--good); border-radius: 4px;
+    padding: 12px 16px; margin-bottom: 18px; font-size: 13px;
+  }
+  .trace-bar.show { display: block; }
+  .trace-bar.mismatch { border-left-color: var(--warn); }
+  .trace-bar .meta { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+
+  .drop-hint {
+    border: 1px dashed var(--border); border-radius: 4px;
+    padding: 10px 14px; font-size: 12.5px; color: var(--text-muted);
+    margin-bottom: 18px;
+  }
+  body.dragging .drop-hint { border-color: var(--good); color: var(--text-primary); }
 </style>
 </head>
 <body>
@@ -588,6 +616,20 @@
     </label>
   </div>
   <p class="live-hint">Enter any real domain above and click Go &mdash; DNS records, TTLs, and the resolved IP's network/location are fetched live via public DNS-over-HTTPS resolvers (Google &amp; Cloudflare), not hardcoded. TCP/TLS internals aren't visible to browser JavaScript &mdash; the companion Python script below shows those for real.</p>
+
+  <p class="prov-legend">
+    <span><span class="prov prov-measured">●</span> measured — from an imported trace</span>
+    <span><span class="prov prov-live">◐</span> live — fetched by this page just now</span>
+    <span><span class="prov prov-illustrative">○</span> illustrative — a teaching example</span>
+    <span><span class="prov prov-redacted">◍</span> redacted at export</span>
+  </p>
+
+  <div class="drop-hint" id="dropHint">
+    Drop a <code>trace.json</code> here (or <label class="visually-hidden" for="traceFile">choose a trace file</label><input type="file" id="traceFile" accept=".json,application/json">) to replace the illustrative values with real measurements from
+    <code>python3 trace.py example.com --json trace.json</code>.
+  </div>
+
+  <div class="trace-bar" id="traceBar"></div>
 
   <div class="live-panel" id="livePanel">
     <div class="live-panel-head">
@@ -641,6 +683,152 @@
     { n: 2, key: "l2", name: "Data Link", proto: "Ethernet, MAC, switches", desc: "Moves frames between devices on the same local network. MAC addresses and switches live here. A switch makes its forwarding decisions at this layer, not the IP layer." },
     { n: 1, key: "l1", name: "Physical", proto: "Cables, fiber, radio", desc: "The actual bits on the wire &mdash; electrical signaling on copper, light pulses in fiber, radio waves over Wi-Fi. If a cable is unplugged or a fiber run is damaged, this is where you're failing." }
   ];
+
+  // Flip this to false to make the page fully offline and file:// clean —
+  // that single change is the whole Learning Hub migration.
+  var LIVE_LOOKUPS_ENABLED = true;
+  var TRACE_SCHEMA_MAJOR = 1;
+  var TRACE_STORAGE_KEY = "wj-trace";
+
+  var state = {
+    trace: null,
+    live: null,
+    level: "simple",
+    https: true,
+    layerFilter: null,
+    failure: null
+  };
+
+  var PROV_GLYPH = {
+    measured: "●", live: "◐", illustrative: "○", redacted: "◍"
+  };
+  var PROV_LABEL = {
+    measured: "measured — from the imported trace",
+    live: "live — fetched by this page just now",
+    illustrative: "illustrative — a teaching example, not your data",
+    redacted: "redacted at export"
+  };
+
+  function fact(value, source) {
+    if (value === "[redacted at export]") return { value: "redacted", source: "redacted" };
+    return { value: value, source: source };
+  }
+
+  function renderFact(f) {
+    if (!f || f.value === null || f.value === undefined || f.value === "") return "";
+    return escapeHtml(String(f.value)) +
+      '<span class="prov prov-' + f.source + '" title="' + escapeHtml(PROV_LABEL[f.source]) +
+      '">' + PROV_GLYPH[f.source] + "</span>";
+  }
+
+  function traceSection(name) {
+    if (!state.trace) return null;
+    var section = state.trace[name];
+    return section && section.observed ? section : null;
+  }
+
+  function traceWhyNot(name) {
+    if (!state.trace) return null;
+    var section = state.trace[name];
+    return section && !section.observed ? section.why_not : null;
+  }
+
+  function importTraceText(text) {
+    var parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      return { ok: false, error: "That file isn't valid JSON." };
+    }
+    var schema = parsed && parsed.schema;
+    if (typeof schema !== "string" || schema.indexOf("webpage-journey-trace/") !== 0) {
+      return { ok: false, error: "That JSON isn't a webpage-journey trace document." };
+    }
+    var major = parseInt(schema.split("/")[1], 10);
+    if (major !== TRACE_SCHEMA_MAJOR) {
+      return { ok: false, error: "This trace is schema version " + major +
+               "; this page reads version " + TRACE_SCHEMA_MAJOR +
+               ". Re-run trace.py, or open the matching version of this page." };
+    }
+    return { ok: true, trace: parsed };
+  }
+
+  function adoptTrace(trace) {
+    state.trace = trace;
+    try { localStorage.setItem(TRACE_STORAGE_KEY, JSON.stringify(trace)); } catch (e) {}
+    renderTraceBar();
+    refreshAllBodies();
+  }
+
+  function renderTraceBar() {
+    var bar = document.getElementById("traceBar");
+    if (!state.trace) { bar.classList.remove("show"); return; }
+
+    var t = state.trace;
+    var host = (t.target || {}).host || "unknown host";
+    var typed = parseHostFromInput(urlInput.value);
+    var mismatch = typed && typed !== host;
+
+    var unobserved = [];
+    ["local", "dns", "tcp", "tls", "http", "path"].forEach(function (name) {
+      var why = traceWhyNot(name);
+      if (why) unobserved.push(name + ": " + why);
+    });
+
+    bar.classList.add("show");
+    bar.classList.toggle("mismatch", !!mismatch);
+    bar.innerHTML =
+      "<strong>Trace loaded for " + escapeHtml(host) + "</strong>" +
+      (mismatch ? ' <span style="color:var(--warn)">— the box above says ' +
+                  escapeHtml(typed) + ", so those two disagree. Values below come from the trace.</span>" : "") +
+      '<div class="meta">captured ' + escapeHtml(t.generated_at || "?") +
+      " by " + escapeHtml((t.tool || {}).name || "trace.py") + " " +
+      escapeHtml((t.tool || {}).version || "") +
+      (t.redacted ? " · exported with redaction" : "") +
+      (unobserved.length ? "<br>not observed — " + escapeHtml(unobserved.join(" · ")) : "") +
+      "</div>";
+  }
+
+  function wireTraceImport() {
+    var hint = document.getElementById("dropHint");
+    var input = document.getElementById("traceFile");
+
+    function load(file) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var result = importTraceText(String(reader.result));
+        if (result.ok) {
+          adoptTrace(result.trace);
+        } else {
+          hint.innerHTML = '<span style="color:var(--critical)">' +
+                           escapeHtml(result.error) + "</span>";
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    input.addEventListener("change", function () {
+      if (input.files && input.files[0]) load(input.files[0]);
+    });
+
+    ["dragenter", "dragover"].forEach(function (name) {
+      document.addEventListener(name, function (e) {
+        e.preventDefault();
+        document.body.classList.add("dragging");
+      });
+    });
+    ["dragleave", "drop"].forEach(function (name) {
+      document.addEventListener(name, function (e) {
+        e.preventDefault();
+        document.body.classList.remove("dragging");
+      });
+    });
+    document.addEventListener("drop", function (e) {
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+        load(e.dataTransfer.files[0]);
+      }
+    });
+  }
 
   var JOURNEY = [
     {
@@ -781,6 +969,13 @@
   }
 
   async function performLiveLookup(rawValue) {
+    if (!LIVE_LOOKUPS_ENABLED) {
+      liveState = "error";
+      liveError = "Live lookups are disabled in this build. Drop a trace file for real data.";
+      renderLivePanel();
+      refreshAllBodies();
+      return;
+    }
     var host = parseHostFromInput(rawValue);
     liveData = null;
     liveError = "";
@@ -1117,6 +1312,9 @@
   // ---------------- HTTPS toggle ----------------
   var httpsToggle = document.getElementById("httpsToggle");
   var urlInput = document.getElementById("urlInput");
+  urlInput.addEventListener("input", function () {
+    if (state.trace) renderTraceBar();
+  });
   httpsToggle.addEventListener("change", function () {
     httpsOn = httpsToggle.checked;
     urlInput.value = urlInput.value.replace(/^https?:\/\//, httpsOn ? "https://" : "http://");
@@ -1251,6 +1449,21 @@
 
   // init
   httpsToggle.checked = true;
+  wireTraceImport();
+
+  try {
+    var stored = localStorage.getItem(TRACE_STORAGE_KEY);
+    if (stored) {
+      var restored = importTraceText(stored);
+      if (restored.ok) { state.trace = restored.trace; renderTraceBar(); }
+    }
+  } catch (e) {}
+
+  var deepLinkHost = new URLSearchParams(window.location.search).get("host");
+  if (deepLinkHost) {
+    urlInput.value = (httpsOn ? "https://" : "http://") + deepLinkHost;
+    if (LIVE_LOOKUPS_ENABLED) goBtn.click();
+  }
 })();
 </script>
 </body>
