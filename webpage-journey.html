@@ -5,77 +5,67 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>What Really Happens When You Load a Webpage</title>
 <style>
+  /* Dark-first, matching the Learning Hub convention: :root is dark, body.light overrides.
+     Layer chip backgrounds are shared by both themes and all clear 4.5:1 against white text. */
   :root {
-    color-scheme: light;
-    --surface-1:      #fcfcfb;
-    --page:           #f9f9f7;
-    --text-primary:   #0b0b0b;
-    --text-secondary: #52514e;
-    --text-muted:     #898781;
-    --gridline:       #e1e0d9;
-    --baseline:       #c3c2b7;
-    --border:         rgba(11,11,11,0.10);
-    --card-bg:        #ffffff;
-
-    /* OSI categorical slots, fixed order (identity, not magnitude) */
-    --l7: #2a78d6; /* blue    - Application */
-    --l6: #eb6834; /* orange  - Presentation */
-    --l5: #1baf7a; /* aqua    - Session */
-    --l4: #eda100; /* yellow  - Transport */
-    --l3: #e87ba4; /* magenta - Network */
-    --l2: #008300; /* green   - Data Link */
-    --l1: #4a3aa7; /* violet  - Physical */
-
-    --good: #0ca30c;
-    --critical: #d03b3b;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:where(:not([data-theme="light"])) {
-      color-scheme: dark;
-      --surface-1:      #1a1a19;
-      --page:           #0d0d0d;
-      --text-primary:   #ffffff;
-      --text-secondary: #c3c2b7;
-      --text-muted:     #898781;
-      --gridline:       #2c2c2a;
-      --baseline:       #383835;
-      --border:         rgba(255,255,255,0.10);
-      --card-bg:        #212120;
-
-      --l7: #3987e5;
-      --l6: #d95926;
-      --l5: #199e70;
-      --l4: #c98500;
-      --l3: #d55181;
-      --l2: #008300;
-      --l1: #9085e9;
-
-      --good: #0ca30c;
-      --critical: #e66767;
-    }
-  }
-  :root[data-theme="dark"] {
     color-scheme: dark;
     --surface-1:      #1a1a19;
     --page:           #0d0d0d;
     --text-primary:   #ffffff;
     --text-secondary: #c3c2b7;
-    --text-muted:     #898781;
+    --text-muted:     #8f8d86;
     --gridline:       #2c2c2a;
-    --baseline:       #383835;
-    --border:         rgba(255,255,255,0.10);
+    --border:         rgba(255,255,255,0.12);
     --card-bg:        #212120;
 
-    --l7: #3987e5;
-    --l6: #d95926;
-    --l5: #199e70;
-    --l4: #c98500;
-    --l3: #d55181;
-    --l2: #008300;
-    --l1: #9085e9;
+    --l7: #1f5fae;  /* Application  — 6.4:1 on white */
+    --l6: #b4491b;  /* Presentation — 5.5:1 */
+    --l5: #0e7a55;  /* Session      — 5.3:1 */
+    --l4: #8a5a00;  /* Transport    — 6.0:1 */
+    --l3: #a8306b;  /* Network      — 6.4:1 */
+    --l2: #16711f;  /* Data Link    — 6.1:1 */
+    --l1: #4a3aa7;  /* Physical     — 8.6:1 */
 
-    --good: #0ca30c;
+    --l7-accent: #6aa6ee;
+    --l6-accent: #f08a5d;
+    --l5-accent: #3fc79a;
+    --l4-accent: #e0a72e;
+    --l3-accent: #e97fb0;
+    --l2-accent: #4fbf58;
+    --l1-accent: #9085e9;
+
+    --good: #3fbf5a;
     --critical: #e66767;
+    --warn: #e0a72e;
+  }
+  body.light {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #6d6b66;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.12);
+    --card-bg:        #ffffff;
+
+    --l7-accent: #1f5fae;
+    --l6-accent: #b4491b;
+    --l5-accent: #0e7a55;
+    --l4-accent: #8a5a00;
+    --l3-accent: #a8306b;
+    --l2-accent: #16711f;
+    --l1-accent: #4a3aa7;
+
+    --good: #0a7d24;
+    --critical: #c02b2b;
+    --warn: #8a5a00;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 
   * { box-sizing: border-box; }
@@ -390,8 +380,9 @@
     font-size: 12px; font-weight: 700;
     color: var(--text-secondary);
   }
-  .step-titles { flex: 1; min-width: 0; }
+  .step-titles { display: flex; flex-direction: column; flex: 1; min-width: 0; }
   .step-phase {
+    display: block;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -399,6 +390,7 @@
     margin: 0 0 2px;
   }
   .step-title {
+    display: block;
     font-size: 15px;
     font-weight: 600;
     margin: 0;
@@ -425,12 +417,14 @@
   }
   .step-card.expanded .step-caret { transform: rotate(90deg); }
 
+  /* grid-template-rows animates to true auto height — max-height would clip taller content */
   .step-body {
-    max-height: 0;
-    overflow: hidden;
-    transition: max-height 0.3s ease;
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.3s ease;
   }
-  .step-card.expanded .step-body { max-height: 600px; }
+  .step-card.expanded .step-body { grid-template-rows: 1fr; }
+  .step-body > .step-body-inner { min-height: 0; overflow: hidden; }
   .step-body-inner {
     padding-top: 12px;
     margin-top: 12px;
@@ -537,6 +531,30 @@
     font-size: 12.5px;
     color: var(--text-muted);
     line-height: 1.6;
+  }
+
+  .step-head {
+    width: 100%;
+    background: none;
+    border: none;
+    font-family: inherit;
+    color: inherit;
+    text-align: left;
+    padding: 0;
+    cursor: pointer;
+  }
+  .step-head:focus-visible,
+  .osi-layer:focus-visible,
+  .theme-btn:focus-visible,
+  .btn-primary:focus-visible,
+  .btn-ghost:focus-visible {
+    outline: 3px solid var(--l7-accent);
+    outline-offset: 2px;
+  }
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap; border: 0;
   }
 </style>
 </head>
@@ -693,7 +711,7 @@
       title: "HTTP Response Sent Back",
       simple: "The server sends back a status code (did it work?), some headers (metadata), and the actual content.",
       technical: "Travels back over the same TCP/TLS connection that's still open, avoiding a fresh handshake. The status code is the first thing worth reading &mdash; it tells you which of five broad outcomes happened before you even look at the body.",
-      code: "HTTP/2 200 OK\nContent-Type: text/html\nCache-Control: max-age=300\nSet-Cookie: session=abc123; Secure; HttpOnly\n\n&lt;html&gt;...&lt;/html&gt;\n\n— common status codes —\n200 OK              request succeeded\n301 Moved Perm.      redirect, update bookmarks/links\n304 Not Modified     use your cached copy, body omitted\n404 Not Found        no resource at this path\n500 Internal Error   your app crashed handling it\n502 Bad Gateway       load balancer got a bad reply from the app\n503 Unavailable      app is overloaded or down for maintenance",
+      code: "HTTP/2 200 OK\nContent-Type: text/html\nCache-Control: max-age=300\nSet-Cookie: session=abc123; Secure; HttpOnly\n\n<html>...</html>\n\n— common status codes —\n200 OK              request succeeded\n301 Moved Perm.      redirect, update bookmarks/links\n304 Not Modified     use your cached copy, body omitted\n404 Not Found        no resource at this path\n500 Internal Error   your app crashed handling it\n502 Bad Gateway       load balancer got a bad reply from the app\n503 Unavailable      app is overloaded or down for maintenance",
       layers: [ {n:7,w:"primary"} ],
       pos: 78
     },
@@ -702,7 +720,7 @@
       title: "Browser Parses & Renders",
       simple: "Your browser reads the HTML and progressively builds the page you see, fetching extra files like images and stylesheets along the way.",
       technical: "HTML is parsed incrementally into the DOM. CSS is parsed into the CSSOM (render-blocking by default). Synchronous &lt;script&gt; tags block HTML parsing unless marked async/defer. DOM + CSSOM merge into a Render Tree → Layout computes exact geometry → Paint fills in pixels → Compositing assembles layers, often GPU-accelerated, into the final frame. Referenced images, fonts, and scripts trigger their own requests &mdash; over HTTP/2 or HTTP/3 these are typically multiplexed over the connection that's already open, reusing the same TCP/TLS session instead of repeating steps 3 and 4 for every single file.",
-      code: "Parsing index.html finds:\n  &lt;link rel=\"stylesheet\" href=\"/style.css\"&gt;\n  &lt;script src=\"/app.js\" defer&gt;&lt;/script&gt;\n  &lt;img src=\"/logo.png\"&gt;\n\n3 more requests fire — same connection, no new handshake:\n  GET /style.css   → 200, 4.1 KB\n  GET /app.js       → 200, 61 KB\n  GET /logo.png     → 200, 12 KB (or 304 if cached)",
+      code: "Parsing index.html finds:\n  <link rel=\"stylesheet\" href=\"/style.css\">\n  <script src=\"/app.js\" defer><\/script>\n  <img src=\"/logo.png\">\n\n3 more requests fire — same connection, no new handshake:\n  GET /style.css   → 200, 4.1 KB\n  GET /app.js       → 200, 61 KB\n  GET /logo.png     → 200, 12 KB (or 304 if cached)",
       layers: [],
       pos: 90
     },
@@ -890,7 +908,7 @@
     if (d.MX.length) add("MX", d.MX);
     if (d.NS.length) add("NS", d.NS);
     if (d.TXT.length) add("TXT", d.TXT, 4);
-    return escapeHtml(lines.join("\n"));
+    return lines.join("\n");
   }
 
   function buildTcpCode(defaultCode) {
@@ -906,7 +924,7 @@
       "",
       "[connection established — data can now flow both ways]"
     ];
-    return escapeHtml(lines.join("\n"));
+    return lines.join("\n");
   }
 
   // ---------------- Build OSI stack ----------------
@@ -972,32 +990,29 @@
       return '<span class="chip" style="background:var(' + LAYER_COLOR_VARS[l.n] + ')">L' + l.n + '</span>';
     }).join("");
 
+    var headId = "step-head-" + idx;
+    var bodyId = "step-body-" + idx;
+
     card.innerHTML =
-      '<div class="step-head">' +
-        '<div class="step-num">' + (idx + 1) + '</div>' +
-        '<div class="step-titles">' +
-          '<p class="step-phase">' + step.phase + '</p>' +
-          '<p class="step-title">' + step.title + '</p>' +
-        '</div>' +
-        '<div class="step-chips">' + chips + '</div>' +
-        '<div class="step-caret">&#9656;</div>' +
-      '</div>' +
-      '<div class="step-body"><div class="step-body-inner"></div></div>';
+      '<button class="step-head" type="button" id="' + headId + '"' +
+              ' aria-expanded="false" aria-controls="' + bodyId + '">' +
+        '<span class="step-num">' + (idx + 1) + '</span>' +
+        '<span class="step-titles">' +
+          '<span class="step-phase">' + escapeHtml(step.phase) + '</span>' +
+          '<span class="step-title">' + escapeHtml(step.title) + '</span>' +
+        '</span>' +
+        '<span class="step-chips">' + chips + '</span>' +
+        '<span class="step-caret" aria-hidden="true">&#9656;</span>' +
+      '</button>' +
+      '<div class="step-body" id="' + bodyId + '" role="region" aria-labelledby="' + headId + '">' +
+        '<div class="step-body-inner"></div>' +
+      '</div>';
 
     stepsContainer.appendChild(card);
     cardEls.push(card);
 
-    card.addEventListener("click", function () {
-      var willExpand = !card.classList.contains("expanded");
-      cardEls.forEach(function (c) { c.classList.remove("expanded"); });
-      if (willExpand) {
-        card.classList.add("expanded");
-        renderStepBody(card, step);
-        setActiveStep(idx, false);
-      } else {
-        highlightLayers([]);
-        setTrack(null);
-      }
+    card.querySelector(".step-head").addEventListener("click", function () {
+      setExpanded(idx, !card.classList.contains("expanded"));
     });
   });
 
@@ -1033,7 +1048,8 @@
     if (step.title === "TCP Connection") codeContent = buildTcpCode(step.code);
 
     if (levelState === "technical" && codeContent) {
-      html += '<p class="label">On the wire</p><code class="block">' + codeContent + "</code>";
+      html += '<p class="label">On the wire</p><code class="block">' +
+              escapeHtml(codeContent) + "</code>";
     }
     if (step.httpsOnly) {
       html += '<p class="https-note' + (httpsOn ? "" : " show") + '">Without HTTPS, this step is skipped entirely — meaning the DNS lookup already happened in the clear, and everything from here on (headers, cookies, page content) travels as plain text that any network hop in between can read or modify.</p>';
@@ -1048,6 +1064,45 @@
       }
     });
   }
+
+  var REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function setExpanded(idx, open) {
+    cardEls.forEach(function (c, i) {
+      var isTarget = i === idx;
+      var shouldOpen = isTarget && open;
+      c.classList.toggle("expanded", shouldOpen);
+      c.querySelector(".step-head").setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+    });
+    if (open) {
+      renderStepBody(cardEls[idx], JOURNEY[idx]);
+      setActiveStep(idx, false);
+    } else {
+      highlightLayers([]);
+      setTrack(null);
+    }
+  }
+
+  function focusStep(idx) {
+    var visible = visibleIndices();
+    if (!visible.length) return;
+    var pos = Math.max(0, Math.min(visible.length - 1, idx));
+    cardEls[visible[pos]].querySelector(".step-head").focus();
+  }
+
+  stepsContainer.addEventListener("keydown", function (e) {
+    var head = e.target.closest(".step-head");
+    if (!head) return;
+    var current = cardEls.findIndex(function (c) { return c.contains(head); });
+    var visible = visibleIndices();
+    var pos = visible.indexOf(current);
+
+    if (e.key === "ArrowDown") { e.preventDefault(); focusStep(pos + 1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); focusStep(pos - 1); }
+    else if (e.key === "Home") { e.preventDefault(); focusStep(0); }
+    else if (e.key === "End") { e.preventDefault(); focusStep(visible.length - 1); }
+    else if (e.key === "Escape") { setExpanded(current, false); }
+  });
 
   // ---------------- Level toggle ----------------
   var levelToggle = document.getElementById("levelToggle");
@@ -1171,18 +1226,21 @@
 
   // ---------------- Theme toggle ----------------
   var themeBtn = document.getElementById("themeToggle");
-  var current = null;
+
+  function applyTheme(name) {
+    document.body.classList.toggle("light", name === "light");
+    themeBtn.textContent = name === "light" ? "Dark mode" : "Light mode";
+    themeBtn.setAttribute("aria-pressed", name === "light" ? "false" : "true");
+    try { localStorage.setItem("wj-theme", name); } catch (e) {}
+  }
+
+  var storedTheme = null;
+  try { storedTheme = localStorage.getItem("wj-theme"); } catch (e) {}
+  applyTheme(storedTheme ||
+    (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"));
+
   themeBtn.addEventListener("click", function () {
-    if (current === "dark") {
-      document.documentElement.removeAttribute("data-theme");
-      current = "light";
-      themeBtn.textContent = "Dark mode";
-      document.documentElement.setAttribute("data-theme", "light");
-    } else {
-      document.documentElement.setAttribute("data-theme", "dark");
-      current = "dark";
-      themeBtn.textContent = "Light mode";
-    }
+    applyTheme(document.body.classList.contains("light") ? "dark" : "light");
   });
 
   // init
