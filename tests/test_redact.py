@@ -1,4 +1,5 @@
 import copy
+import json
 
 from wj import redact
 
@@ -13,8 +14,21 @@ def sample_trace():
                   "public_ip": "81.180.20.7", "mtu": 1500,
                   "dhcp": {"server": "192.168.1.1", "lease_seconds": 86400,
                            "dns": ["192.168.1.1"]}},
+        "dns": {"observed": True,
+                "records": {"A": [{"data": "93.184.216.34", "ttl": 300}], "AAAA": []},
+                "records_failed": [],
+                "resolver": {"servers": ["192.168.1.1", "1.1.1.1"], "source": "scutil"},
+                "dnssec": "secure", "delegation": [], "alpn_advertised": [], "ech": False,
+                "timing_ms": {"cold": 12.0, "warm": 1.0}},
         "tcp": {"observed": True, "local": {"ip": "192.168.1.23", "port": 54213},
                 "chosen": {"ip": "93.184.216.34", "family": "ipv4", "port": 443}},
+        "tls": {"observed": True,
+                "chain": [{"subject_cn": "example.com", "days_left": 80}],
+                "legacy_versions_accepted": [], "caa_match": True},
+        "http": {"observed": True, "hops": [], "final": {"status": 200},
+                 "security": {"grade": "A", "missing": [],
+                              "cookies": [{"name": "s", "secure": True,
+                                           "httponly": True, "samesite": "Lax"}]}},
         "path": {"observed": True, "hops": [
             {"ttl": 1, "ip": "192.168.1.1", "rdns": "router.lan", "rtt_ms": 1.2},
             {"ttl": 2, "ip": "93.184.216.34", "rdns": None, "rtt_ms": 12.0}]},
@@ -62,23 +76,29 @@ def test_redacting_an_unobserved_section_is_a_no_op():
     assert out["local"] == {"observed": False, "why_not": "no route tool"}
 
 
-def test_no_mac_or_private_ip_survives_in_serialized_output():
-    import json
+def test_redacts_a_private_dns_resolver_but_keeps_a_public_one():
+    out = redact.redact_trace(sample_trace())
+    assert out["dns"]["resolver"]["servers"][0] == redact.REDACTED
+    assert out["dns"]["resolver"]["servers"][1] == "1.1.1.1"
 
+
+def test_no_private_identifier_survives_serialisation():
+    out = redact.redact_trace(sample_trace())
+    blob = json.dumps(out)
+
+    for leaked in ("aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66",
+                   "192.168.1.23", "192.168.1.1", "81.180.20.7"):
+        assert leaked not in blob, leaked
+
+    # Public facts are measurements worth keeping.
+    assert "93.184.216.34" in blob
+    assert "1.1.1.1" in blob
+
+
+def test_a_malformed_hop_address_is_redacted_rather_than_published():
     trace = sample_trace()
+    trace["path"]["hops"].append(
+        {"ttl": 5, "ip": "12:34:56:78", "rdns": "weird-hop.example", "rtt_ms": 9.9})
     out = redact.redact_trace(trace)
-    serialized = json.dumps(out)
-
-    # MAC addresses from the input must not survive anywhere in the output.
-    assert "aa:bb:cc:dd:ee:ff" not in serialized
-    assert "11:22:33:44:55:66" not in serialized
-
-    # Private IPs (local, gateway, and the private traceroute hop) must not survive.
-    assert "192.168.1.23" not in serialized
-    assert "192.168.1.1" not in serialized
-
-    # The public IP is also treated as identifying and must be redacted.
-    assert "81.180.20.7" not in serialized
-
-    # But the public tcp/path IP is not identifying and must be preserved.
-    assert "93.184.216.34" in serialized
+    assert out["path"]["hops"][-1]["ip"] == redact.REDACTED
+    assert "12:34:56:78" not in json.dumps(out)

@@ -1,12 +1,27 @@
 """Strip identifying detail from a trace before it is exported and shared."""
 
 import copy
-
-from wj.collect.local import is_private
+import ipaddress
 
 REDACTED = "[redacted at export]"
 
 LOCAL_FIELDS = ("local_ip", "local_mac", "gateway_ip", "gateway_mac", "public_ip")
+
+
+def _identifies_operator(value):
+    """True unless the address is provably public and globally routable.
+
+    Redaction fails CLOSED: a value we cannot parse is redacted rather than
+    published. This is deliberately the opposite polarity from
+    collect.local.is_private(), where an unparseable address should simply
+    not count toward the NAT determination.
+    """
+    if not value:
+        return False
+    try:
+        return not ipaddress.ip_address(value).is_global
+    except ValueError:
+        return True
 
 
 def redact_trace(trace):
@@ -31,9 +46,18 @@ def redact_trace(trace):
     path = out.get("path", {})
     if path.get("observed"):
         for hop in path.get("hops", []):
-            if hop.get("ip") and is_private(hop["ip"]):
+            if hop.get("ip") and _identifies_operator(hop["ip"]):
                 hop["ip"] = REDACTED
                 if hop.get("rdns"):
                     hop["rdns"] = REDACTED
+
+    dns = out.get("dns", {})
+    if dns.get("observed"):
+        resolver = dns.get("resolver") or {}
+        if resolver.get("servers"):
+            resolver["servers"] = [
+                REDACTED if _identifies_operator(s) else s
+                for s in resolver["servers"]
+            ]
 
     return out
