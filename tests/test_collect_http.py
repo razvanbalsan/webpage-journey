@@ -29,6 +29,12 @@ def test_parse_response_survives_a_truncated_status_line():
     assert parsed["headers"] == []
 
 
+def test_parse_response_reports_reason_as_absent_not_empty_string():
+    parsed = http_collect.parse_response(b"HTTP/1.1 200\r\n\r\n")
+    assert parsed["status"] == 200
+    assert parsed["reason"] is None
+
+
 def test_header_value_is_case_insensitive():
     headers = [("Content-Type", "text/html")]
     assert http_collect.header_value(headers, "content-type") == "text/html"
@@ -141,6 +147,7 @@ def test_collect_follows_a_redirect_chain(monkeypatch):
 
     section = http_collect.collect(ctx, fetch=lambda url, sock: pages[url])
     assert section["observed"] is True
+    assert section["redirect_limit_reached"] is False
     assert len(section["hops"]) == 1
     assert section["hops"][0]["status"] == 301
     assert section["final"]["status"] == 200
@@ -165,6 +172,30 @@ def test_collect_stops_at_the_redirect_limit():
 
     section = http_collect.collect(ctx, fetch=always_redirect)
     assert len(section["hops"]) <= http_collect.MAX_REDIRECTS
+    assert section["redirect_limit_reached"] is True
+
+
+def test_final_url_names_the_hop_that_was_actually_fetched():
+    from wj import capabilities
+    from wj.context import Context
+
+    caps = capabilities.Capabilities(libs={}, tools={}, privileged=False, can_sudo=False)
+    ctx = Context(host="example.com", scheme="https", port=443, path="/",
+                  timeout=5.0, deadline=1e9, caps=caps, results={})
+    ctx.results["tcp"] = {"observed": True, "_socket": object()}
+    ctx.results["tls"] = {"observed": True, "_socket": object()}
+
+    seen = []
+
+    def walking_redirect(url, sock):
+        seen.append(url)
+        return {"protocol": "HTTP/1.1", "status": 302, "reason": "Found",
+                "headers": [("Location", f"https://example.com/hop{len(seen)}")],
+                "body": b"", "ttfb_ms": 1.0, "total_ms": 1.0, "wire_bytes": 10}
+
+    section = http_collect.collect(ctx, fetch=walking_redirect)
+    assert section["final"]["url"] == seen[-1]
+    assert section["redirect_limit_reached"] is True
 
 
 def test_collect_reports_content_type_as_absent_not_empty_string():

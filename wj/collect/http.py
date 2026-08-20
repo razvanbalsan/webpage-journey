@@ -52,7 +52,7 @@ def parse_response(raw):
                 status = int(parts[1])
             except ValueError:
                 status = None
-        reason = parts[2] if len(parts) > 2 else ""
+        reason = parts[2] if len(parts) > 2 else None
 
     headers = []
     for line in lines[1:]:
@@ -190,45 +190,52 @@ def _open(split, ctx):
 def _socket_fetch(ctx):
     def fetch(url, sock):
         split = urlsplit(url)
-        if sock is None:
+        opened_here = sock is None
+        if opened_here:
             # Each redirect hop needs a fresh connection: the first one was opened by
             # the TCP/TLS collectors and closes after this response (Connection: close).
             sock = _open(split, ctx)
-        path = split.path or "/"
-        if split.query:
-            path += "?" + split.query
-        request = (
-            f"GET {path} HTTP/1.1\r\n"
-            f"Host: {split.hostname}\r\n"
-            f"User-Agent: webpage-journey/2.0\r\n"
-            f"Accept-Encoding: gzip, deflate\r\n"
-            f"Accept: */*\r\n"
-            f"Connection: close\r\n\r\n"
-        ).encode()
+        try:
+            path = split.path or "/"
+            if split.query:
+                path += "?" + split.query
+            request = (
+                f"GET {path} HTTP/1.1\r\n"
+                f"Host: {split.hostname}\r\n"
+                f"User-Agent: webpage-journey/2.0\r\n"
+                f"Accept-Encoding: gzip, deflate\r\n"
+                f"Accept: */*\r\n"
+                f"Connection: close\r\n\r\n"
+            ).encode()
 
-        sock.settimeout(ctx.budget_for(ctx.timeout))
-        started = time.perf_counter()
-        sock.sendall(request)
+            sock.settimeout(ctx.budget_for(ctx.timeout))
+            started = time.perf_counter()
+            sock.sendall(request)
 
-        chunks = []
-        ttfb = None
-        while True:
-            try:
-                data = sock.recv(65536)
-            except OSError:
-                break
-            if not data:
-                break
-            if ttfb is None:
-                ttfb = round((time.perf_counter() - started) * 1000, 1)
-            chunks.append(data)
+            chunks = []
+            ttfb = None
+            while True:
+                try:
+                    data = sock.recv(65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                if ttfb is None:
+                    ttfb = round((time.perf_counter() - started) * 1000, 1)
+                chunks.append(data)
 
-        raw = b"".join(chunks)
-        parsed = parse_response(raw)
-        parsed["ttfb_ms"] = ttfb
-        parsed["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
-        parsed["wire_bytes"] = len(parsed["body"])
-        return parsed
+            raw = b"".join(chunks)
+            parsed = parse_response(raw)
+            parsed["ttfb_ms"] = ttfb
+            parsed["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
+            parsed["wire_bytes"] = len(parsed["body"])
+            return parsed
+        finally:
+            # Only close what this call opened. The first hop's socket belongs to
+            # the TLS/TCP collector and is closed later by the orchestrator.
+            if opened_here:
+                sock.close()
 
     return fetch
 
@@ -254,6 +261,8 @@ def collect(ctx, fetch=None):
     url = f"{ctx.scheme}://{ctx.host}{ctx.path}"
     hops = []
     response = None
+    fetched_url = url
+    limit_reached = True  # cleared by the break below once a non-redirect response lands
 
     for _ in range(MAX_REDIRECTS):
         try:
@@ -262,6 +271,8 @@ def collect(ctx, fetch=None):
             section = unobserved(f"request failed: {exc}")
             section["hops"] = hops
             return section
+
+        fetched_url = url  # this is the URL these measurements describe
 
         status = response.get("status")
         location = header_value(response["headers"], "location")
@@ -278,6 +289,7 @@ def collect(ctx, fetch=None):
             url = urljoin(url, location)
             sock = None  # fetch opens a fresh connection for the next hop
             continue
+        limit_reached = False
         break
 
     decoded, encoding = decode_body(response["headers"], response["body"])
@@ -288,7 +300,8 @@ def collect(ctx, fetch=None):
 
     return observed(
         hops=hops,
-        final={"url": url, "status": response["status"], "reason": response.get("reason"),
+        redirect_limit_reached=limit_reached,
+        final={"url": fetched_url, "status": response["status"], "reason": response.get("reason"),
                "protocol": response.get("protocol"), "headers": response["headers"],
                "ttfb_ms": response.get("ttfb_ms"), "total_ms": response.get("total_ms"),
                "wire_bytes": wire, "decoded_bytes": len(decoded),
