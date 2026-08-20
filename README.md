@@ -13,6 +13,43 @@ load a webpage — from opposite ends.
 
 ## Quick start
 
+### Homebrew (macOS)
+
+The formula lives in this repo, not a tap, so it is installed from a path rather than by
+name:
+
+```bash
+git clone https://github.com/razvanbalsan/webpage-journey.git
+cd webpage-journey
+brew install --formula ./webpage-journey.rb
+webpage-journey example.com
+```
+
+Or, without cloning first, straight from the raw file on GitHub:
+
+```bash
+brew install --formula https://raw.githubusercontent.com/razvanbalsan/webpage-journey/main/webpage-journey.rb
+```
+
+A few things worth knowing before you rely on this path:
+
+- **There is no `brew upgrade` for this.** Homebrew's upgrade tracking is per-tap; a
+  formula installed from a bare path or URL isn't in one, so `brew upgrade
+  webpage-journey` won't find a new version even after one is tagged. To update, pull the
+  repo (or re-fetch the raw URL) and re-run the install command — add `--force` if
+  Homebrew reports the formula is already installed at that version.
+- **Recent Homebrew (6.x) requires developer mode for path/URL installs.** If the command
+  above is refused with "Homebrew requires formulae to be in a tap", re-run it with
+  `HOMEBREW_DEVELOPER=1 brew install --formula ./webpage-journey.rb`.
+- **The first install builds `cryptography` from source**, which needs a Rust toolchain.
+  Homebrew will pull in `rust` (and its own build dependencies) automatically the first
+  time this formula — or anything else that needs `cryptography` built this way — is
+  installed; that adds real time (several minutes of compiling) and disk space to a
+  from-scratch install. Later installs of other formulae reuse the already-installed
+  `rust`.
+
+### pip (any OS)
+
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install rich dnspython cryptography
