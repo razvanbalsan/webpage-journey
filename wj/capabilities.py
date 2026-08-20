@@ -81,6 +81,10 @@ def _pip_install(pip_name):
 def ensure_libs(caps, mode="auto", in_venv=None, installer=None, prompt=None):
     """Install missing optional libraries, with a virtualenv guardrail.
 
+    Mutates `caps` in place — `libs` and `installed_during_run` are updated on the
+    object you pass in — and returns that same object for convenience. Callers
+    wanting to keep what `detect()` originally found must copy it first.
+
     Inside a virtualenv we install quietly. Against a system interpreter we ask
     once, because silently mutating a system Python is unpleasant to undo.
     """
