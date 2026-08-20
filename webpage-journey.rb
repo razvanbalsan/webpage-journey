@@ -4,7 +4,7 @@ class WebpageJourney < Formula
   desc "Trace a webpage request end to end and map it onto the OSI model"
   homepage "https://github.com/razvanbalsan/webpage-journey"
   url "https://github.com/razvanbalsan/webpage-journey/archive/refs/tags/v2.1.0.tar.gz"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "976cf04731cece54d594274f88e79075448b92768bc792d379d27ac436e323ee"
 
   # No LICENSE file exists in this repository at the time this formula was
   # written, so no `license` field is declared here rather than guessing one.
