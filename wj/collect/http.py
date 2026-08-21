@@ -1,15 +1,13 @@
 """Layer 7: the request, every redirect it took, and what the response tells you."""
 
 import gzip
-import time
 import zlib
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin
 
-from wj.collect.tls import ALPN_PROTOCOLS
 from wj.schema import observed, unobserved
+from wj.transport import h1
 
 MAX_REDIRECTS = 10
-DEFAULT_PORTS = {"http": 80, "https": 443}
 
 SECURITY_HEADERS = (
     "Strict-Transport-Security",
@@ -32,39 +30,6 @@ CDN_SIGNATURES = (
 
 CACHE_HEADERS = ("cf-cache-status", "x-cache", "x-drupal-cache", "x-vercel-cache")
 
-# The fixed headers this tool sends on every hop. Kept as data (not baked into
-# an f-string) so the exact set that went out can be recorded on the trace and
-# shown back to the user, rather than reconstructed by eye from the source.
-REQUEST_HEADERS = (
-    ("User-Agent", "webpage-journey/2.0"),
-    ("Accept-Encoding", "gzip, deflate"),
-    ("Accept", "*/*"),
-    ("Connection", "close"),
-)
-
-
-def build_request(url):
-    """The request line and headers this tool sends for one hop.
-
-    Returned as structured data so collect() can record exactly what was sent
-    on the final hop and the renderer can print it verbatim. Host comes first,
-    as it does on the wire.
-    """
-    split = urlsplit(url)
-    target = split.path or "/"
-    if split.query:
-        target += "?" + split.query
-    headers = [("Host", split.hostname or "")] + list(REQUEST_HEADERS)
-    return {"method": "GET", "target": target,
-            "http_version": "HTTP/1.1", "headers": headers}
-
-
-def request_bytes(request):
-    """Serialise a build_request() dict to the raw bytes put on the socket."""
-    lines = [f"{request['method']} {request['target']} {request['http_version']}"]
-    lines += [f"{key}: {value}" for key, value in request["headers"]]
-    return ("\r\n".join(lines) + "\r\n\r\n").encode()
-
 
 def header_value(headers, name):
     target = name.lower()
@@ -74,50 +39,12 @@ def header_value(headers, name):
     return None
 
 
-def parse_response(raw):
-    blob, _, body = raw.partition(b"\r\n\r\n")
-    lines = blob.decode("latin-1", errors="replace").split("\r\n")
-    protocol = status = reason = None
-    if lines and lines[0]:
-        parts = lines[0].split(" ", 2)
-        protocol = parts[0] if parts else None
-        if len(parts) > 1:
-            try:
-                status = int(parts[1])
-            except ValueError:
-                status = None
-        reason = parts[2] if len(parts) > 2 else None
-
-    headers = []
-    for line in lines[1:]:
-        if ":" in line:
-            key, _, value = line.partition(":")
-            headers.append((key.strip(), value.strip()))
-
-    return {"protocol": protocol, "status": status, "reason": reason,
-            "headers": headers, "body": body}
-
-
-def dechunk(body):
-    out = bytearray()
-    rest = body
-    while rest:
-        size_line, _, rest = rest.partition(b"\r\n")
-        try:
-            size = int(size_line.split(b";")[0].strip(), 16)
-        except ValueError:
-            break
-        if size == 0:
-            break
-        out += rest[:size]
-        rest = rest[size:].lstrip(b"\r\n")
-    return bytes(out)
-
-
 def decode_body(headers, body):
-    if (header_value(headers, "transfer-encoding") or "").lower() == "chunked":
-        body = dechunk(body)
-
+    """Undo Content-Encoding (compression). Transfer-Encoding (framing) is the
+    transport's concern: h1.parse_response() has already dechunked the body and
+    dropped the header by the time it reaches here, and HTTP/2 has no such
+    header at all.
+    """
     # A decompression failure returns None for the decoded body, not the raw
     # (still-compressed) bytes under the same encoding label -- returning the
     # raw bytes made decoded == wire and produced a ~1.0 "compression ratio"
@@ -213,64 +140,6 @@ def detect_cdn(headers):
     return None
 
 
-def _open(split, ctx):
-    """Open a connection for a redirect hop, matching the URL's own scheme."""
-    import socket
-    import ssl
-
-    port = split.port or DEFAULT_PORTS.get(split.scheme, 443)
-    sock = socket.create_connection((split.hostname, port), timeout=ctx.budget_for(ctx.timeout))
-    if split.scheme == "https":
-        context = ssl.create_default_context()
-        context.set_alpn_protocols(ALPN_PROTOCOLS)
-        sock = context.wrap_socket(sock, server_hostname=split.hostname)
-    return sock
-
-
-def _socket_fetch(ctx):
-    def fetch(url, sock):
-        split = urlsplit(url)
-        opened_here = sock is None
-        if opened_here:
-            # Each redirect hop needs a fresh connection: the first one was opened by
-            # the TCP/TLS collectors and closes after this response (Connection: close).
-            sock = _open(split, ctx)
-        try:
-            request = build_request(url)
-
-            sock.settimeout(ctx.budget_for(ctx.timeout))
-            started = time.perf_counter()
-            sock.sendall(request_bytes(request))
-
-            chunks = []
-            ttfb = None
-            while True:
-                try:
-                    data = sock.recv(65536)
-                except OSError:
-                    break
-                if not data:
-                    break
-                if ttfb is None:
-                    ttfb = round((time.perf_counter() - started) * 1000, 1)
-                chunks.append(data)
-
-            raw = b"".join(chunks)
-            parsed = parse_response(raw)
-            parsed["request"] = request
-            parsed["ttfb_ms"] = ttfb
-            parsed["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
-            parsed["wire_bytes"] = len(parsed["body"])
-            return parsed
-        finally:
-            # Only close what this call opened. The first hop's socket belongs to
-            # the TLS/TCP collector and is closed later by the orchestrator.
-            if opened_here:
-                sock.close()
-
-    return fetch
-
-
 def collect(ctx, fetch=None):
     tls = ctx.results.get("tls", {})
     tcp = ctx.results.get("tcp", {})
@@ -287,7 +156,7 @@ def collect(ctx, fetch=None):
     if sock is None:
         return unobserved("no connection to send a request over")
 
-    fetch = fetch or _socket_fetch(ctx)
+    fetch = fetch or h1.fetcher(ctx)
 
     url = f"{ctx.scheme}://{ctx.host}{ctx.path}"
     hops = []
@@ -335,7 +204,7 @@ def collect(ctx, fetch=None):
         redirect_limit_reached=limit_reached,
         final={"url": fetched_url, "status": response["status"], "reason": response.get("reason"),
                "protocol": response.get("protocol"), "headers": response["headers"],
-               "request": response.get("request") or build_request(fetched_url),
+               "request": response.get("request") or h1.build_request(fetched_url),
                "ttfb_ms": response.get("ttfb_ms"), "total_ms": response.get("total_ms"),
                "wire_bytes": wire, "decoded_bytes": decoded_bytes,
                "encoding": encoding, "ratio": ratio, "content_type": content_type},

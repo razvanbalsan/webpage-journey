@@ -3,6 +3,7 @@ import gzip
 import pytest
 
 from wj.collect import http as http_collect
+from wj.transport import h1
 
 RAW_200 = (
     b"HTTP/1.1 200 OK\r\n"
@@ -15,7 +16,7 @@ RAW_200 = (
 
 def test_parse_response_splits_status_headers_and_body():
     raw = RAW_200 + b"BODYBYTES"
-    parsed = http_collect.parse_response(raw)
+    parsed = h1.parse_response(raw)
     assert parsed["protocol"] == "HTTP/1.1"
     assert parsed["status"] == 200
     assert parsed["reason"] == "OK"
@@ -24,13 +25,13 @@ def test_parse_response_splits_status_headers_and_body():
 
 
 def test_parse_response_survives_a_truncated_status_line():
-    parsed = http_collect.parse_response(b"")
+    parsed = h1.parse_response(b"")
     assert parsed["status"] is None
     assert parsed["headers"] == []
 
 
 def test_parse_response_reports_reason_as_absent_not_empty_string():
-    parsed = http_collect.parse_response(b"HTTP/1.1 200\r\n\r\n")
+    parsed = h1.parse_response(b"HTTP/1.1 200\r\n\r\n")
     assert parsed["status"] == 200
     assert parsed["reason"] is None
 
@@ -43,7 +44,7 @@ def test_header_value_is_case_insensitive():
 
 def test_dechunk_reassembles_chunked_body():
     chunked = b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
-    assert http_collect.dechunk(chunked) == b"hello world"
+    assert h1.dechunk(chunked) == b"hello world"
 
 
 def test_decode_body_inflates_gzip_and_reports_encoding():
@@ -60,13 +61,19 @@ def test_decode_body_passes_plain_bodies_through():
     assert encoding is None
 
 
-def test_decode_body_dechunks_before_inflating():
+def test_a_chunked_gzip_body_round_trips_through_parse_then_decode():
     payload = b"y" * 40
     blob = gzip.compress(payload)
     chunked = b"%x\r\n" % len(blob) + blob + b"\r\n0\r\n\r\n"
-    headers = [("Transfer-Encoding", "chunked"), ("Content-Encoding", "gzip")]
-    decoded, encoding = http_collect.decode_body(headers, chunked)
+    raw = (b"HTTP/1.1 200 OK\r\n"
+           b"Transfer-Encoding: chunked\r\n"
+           b"Content-Encoding: gzip\r\n"
+           b"\r\n") + chunked
+
+    parsed = h1.parse_response(raw)
+    decoded, encoding = http_collect.decode_body(parsed["headers"], parsed["body"])
     assert decoded == payload
+    assert encoding == "gzip"
 
 
 def test_decode_body_a_failed_gzip_inflate_returns_none_not_the_raw_bytes():
@@ -238,7 +245,7 @@ def test_final_url_names_the_hop_that_was_actually_fetched():
 
 
 def test_build_request_records_the_line_and_headers_it_will_send():
-    req = http_collect.build_request("https://example.com/dashboard?q=1")
+    req = h1.build_request("https://example.com/dashboard?q=1")
     assert req["method"] == "GET"
     assert req["target"] == "/dashboard?q=1"
     assert req["http_version"] == "HTTP/1.1"
@@ -251,7 +258,7 @@ def test_request_bytes_round_trips_through_parse_response_shape():
     # The bytes build_request/request_bytes produce must be a valid HTTP/1.1
     # request-message: a request line followed by CRLF-separated headers and a
     # blank line. parse_response only parses responses, so assert on the raw form.
-    raw = http_collect.request_bytes(http_collect.build_request("https://example.com/"))
+    raw = h1.request_bytes(h1.build_request("https://example.com/"))
     assert raw.startswith(b"GET / HTTP/1.1\r\n")
     assert raw.endswith(b"\r\n\r\n")
     assert b"Host: example.com\r\n" in raw
