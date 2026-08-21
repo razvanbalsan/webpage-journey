@@ -43,7 +43,7 @@ followed by the tap command above always works.
 `brew install --formula <url>` with *"Non-checksummed download of a formula file from an
 arbitrary URL is unsupported"*, and path installs need `HOMEBREW_DEVELOPER=1`. Use the tap.
 
-The formula builds the tagged release (`v2.1.0`), not your working tree — so a clone that
+The formula builds the tagged release (`v2.3.0`), not your working tree — so a clone that
 is ahead of the tag still installs the tagged code.
 
 A few things worth knowing before you rely on this path:
