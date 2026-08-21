@@ -17,7 +17,8 @@ class FakeTLSSocket:
     sides — the client is tested against an actual HTTP/2 implementation.
     """
 
-    def __init__(self, response_headers, body=b"", chunk_size=None, ping_after_response=False):
+    def __init__(self, response_headers, body=b"", chunk_size=None, ping_after_response=False,
+                 withhold_first_stream=False, informational_headers=None):
         self.server = h2.connection.H2Connection(
             config=h2.config.H2Configuration(client_side=False))
         self.server.initiate_connection()
@@ -34,18 +35,39 @@ class FakeTLSSocket:
         # tail from one fetch() call is not lost before the next fetch()
         # call on the same (reused) connection.
         self.ping_after_response = ping_after_response
+        # When set, the server holds the first request's response back
+        # entirely and only sends it (ahead of the second request's own
+        # response) once a second request arrives -- so a still-open
+        # stream's HEADERS end up in the same recv() buffer as an unrelated
+        # stream's response, end to end through fetch().
+        self.withhold_first_stream = withhold_first_stream
+        self._withheld_stream_id = None
+        # When set, a 1xx informational HEADERS block (e.g. 103 Early Hints)
+        # is sent before the real response on every request.
+        self.informational_headers = informational_headers
 
     def settimeout(self, _seconds):
         pass
+
+    def _respond(self, stream_id):
+        if self.informational_headers is not None:
+            self.server.send_headers(stream_id, self.informational_headers)
+        self.server.send_headers(stream_id, self._response_headers)
+        self.server.send_data(stream_id, self._body, end_stream=True)
+        if self.ping_after_response:
+            self.server.ping(b"12345678")
 
     def sendall(self, data):
         events = self.server.receive_data(data)
         for event in events:
             if isinstance(event, h2.events.RequestReceived):
-                self.server.send_headers(event.stream_id, self._response_headers)
-                self.server.send_data(event.stream_id, self._body, end_stream=True)
-                if self.ping_after_response:
-                    self.server.ping(b"12345678")
+                if self.withhold_first_stream and self._withheld_stream_id is None:
+                    self._withheld_stream_id = event.stream_id
+                    continue
+                if self._withheld_stream_id is not None:
+                    self._respond(self._withheld_stream_id)
+                    self._withheld_stream_id = None
+                self._respond(event.stream_id)
         self._outbox += self.server.data_to_send()
 
     def recv(self, _size):
@@ -164,12 +186,64 @@ def test_pushed_streams_headers_are_not_counted_as_this_streams_wire_bytes():
     pushed_frame = bytes([0, 0, 50, 1, 4, 0, 0, 0, 2]) + b"x" * 50
     our_headers_frame = bytes([0, 0, 20, 1, 4, 0, 0, 0, 1]) + b"y" * 20
 
-    counted, tail, headers_done = h2_transport._consume_header_frames(
-        pushed_frame + our_headers_frame, stream_id=1, headers_done=False)
+    completed, tail, headers_done, open_block_bytes = h2_transport._consume_header_frames(
+        pushed_frame + our_headers_frame, stream_id=1, headers_done=False, open_block_bytes=0)
 
-    assert counted == 20
+    assert completed == [20]
     assert tail == b""
     assert headers_done is False
+    assert open_block_bytes == 0
+
+
+def test_a_different_streams_headers_never_contaminate_this_one_end_to_end():
+    # The helper test above proves the stream-id filter works in isolation,
+    # but deleting it entirely breaks no test that only looks at fetch()'s
+    # public result -- this is that end-to-end test. The server withholds
+    # stream 1's response until stream 3's request arrives, then flushes
+    # both replies together, so stream 1's HEADERS -- still on an open
+    # stream, unrelated to this fetch() call -- land in the exact same
+    # recv() buffer fetch #2 parses while reading stream 3's response.
+    headers = [(":status", "200"), ("content-type", "text/html"),
+               ("server", "example"), ("x-padding", "z" * 200)]
+
+    clean_fetch = h2_transport.fetcher(make_ctx())
+    clean_sock = FakeTLSSocket(headers)
+    clean_fetch("https://example.com/", clean_sock)
+    baseline = clean_fetch("https://example.com/next", clean_sock)
+
+    fetch = h2_transport.fetcher(make_ctx())
+    sock = FakeTLSSocket(headers, withhold_first_stream=True)
+    first = fetch("https://example.com/", sock)
+    second = fetch("https://example.com/next", sock)
+
+    assert first["status"] is None  # the server never answered stream 1's own call
+    assert second["status"] == 200
+    # Same headers, same reused connection, same HPACK dynamic-table state at
+    # encode time (stream 1's response is still encoded first in both runs,
+    # ahead of stream 3's) -- contamination is the only thing that could make
+    # these differ.
+    assert second["header_bytes"] == baseline["header_bytes"]
+
+
+def test_a_1xx_informational_block_is_not_counted_as_this_responses_wire_bytes():
+    # A 1xx informational response (RFC 9110 §15.2 -- 103 Early Hints is a
+    # real, common example, sent by Cloudflare among others) completes its
+    # own HEADERS block on our own stream before the final response's block.
+    # That block must not inflate header_bytes["wire"]: it never appears in
+    # `headers` and has no counterpart in `decoded`.
+    headers = [(":status", "200"), ("content-type", "text/html"),
+               ("server", "example"), ("x-padding", "z" * 200)]
+
+    baseline = h2_transport.fetcher(make_ctx())(
+        "https://example.com/", FakeTLSSocket(headers))
+    with_1xx = h2_transport.fetcher(make_ctx())(
+        "https://example.com/", FakeTLSSocket(
+            headers, informational_headers=[(":status", "103"),
+                                            ("link", "</style.css>; rel=preload")]))
+
+    assert with_1xx["status"] == 200
+    assert with_1xx["headers"] == baseline["headers"]
+    assert with_1xx["header_bytes"] == baseline["header_bytes"]
 
 
 def test_server_push_is_disabled_at_the_protocol_level():

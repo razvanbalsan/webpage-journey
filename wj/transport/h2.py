@@ -14,6 +14,7 @@ from wj.transport.h1 import build_request, open_connection
 # HTTP/2 frame types this module cares about (RFC 7540 §6.1, §6.2, §6.10).
 _DATA_FRAME_TYPE = 0
 _HEADER_FRAME_TYPES = (1, 9)  # HEADERS, CONTINUATION
+_END_HEADERS_FLAG = 0x4  # same bit for both HEADERS and CONTINUATION
 
 
 class TransportUnavailable(Exception):
@@ -50,10 +51,10 @@ def _connection_state(sock):
     return state
 
 
-def _consume_header_frames(buf, stream_id, headers_done):
+def _consume_header_frames(buf, stream_id, headers_done, open_block_bytes):
     """Walk as many complete HTTP/2 frames as `buf` holds, summing the payload
     lengths of HEADERS/CONTINUATION frames that belong to `stream_id`, and
-    return (bytes_counted, tail, headers_done).
+    return (completed_blocks, tail, headers_done, open_block_bytes).
 
     Each frame starts with a 9-byte header: a 3-byte big-endian payload
     length, a 1-byte type, a 1-byte flags field, then a 4-byte stream id
@@ -69,14 +70,29 @@ def _consume_header_frames(buf, stream_id, headers_done):
     filtering does not depend on the server's cooperation the way disabling
     push does. `headers_done` becomes True the first time a DATA frame for
     our stream is seen, so a trailer HEADERS block that can follow the body
-    is not folded into a count that stands in for the initial response
-    header list alone — the same list _decoded_header_size() covers.
+    is never accumulated at all.
+
+    A "header block" is one HEADERS frame plus zero or more CONTINUATION
+    frames, terminated by the frame with END_HEADERS set (RFC 7540 §6.2,
+    §6.10) — `open_block_bytes` accumulates the current, not-yet-terminated
+    block across frames (and across calls, in case a block spans a recv()
+    boundary); when END_HEADERS is seen, that total moves into
+    `completed_blocks` and a fresh block starts at 0. A stream can carry more
+    than one header block before its body: a 1xx informational response
+    (RFC 9110 §15.2 — 103 Early Hints is a real, common example) sends its
+    own complete HEADERS block before the final response's. Byte-parsing
+    alone cannot tell a 1xx block from the final one apart — that requires
+    the decoded :status, which only the h2 event stream knows — so this
+    function only closes out blocks; the caller resolves each completed
+    block against the matching InformationalResponseReceived (discard) or
+    ResponseReceived (keep) event before it becomes part of `wire`.
     """
-    total = 0
+    completed = []
     i = 0
     while i + 9 <= len(buf):
         length = int.from_bytes(buf[i:i + 3], "big")
         frame_type = buf[i + 3]
+        flags = buf[i + 4]
         if i + 9 + length > len(buf):
             break
         frame_stream_id = int.from_bytes(buf[i + 5:i + 9], "big") & 0x7fffffff
@@ -84,9 +100,12 @@ def _consume_header_frames(buf, stream_id, headers_done):
             if frame_type == _DATA_FRAME_TYPE:
                 headers_done = True
             elif frame_type in _HEADER_FRAME_TYPES and not headers_done:
-                total += length
+                open_block_bytes += length
+                if flags & _END_HEADERS_FLAG:
+                    completed.append(open_block_bytes)
+                    open_block_bytes = 0
         i += 9 + length
-    return total, buf[i:], headers_done
+    return completed, buf[i:], headers_done, open_block_bytes
 
 
 def _decoded_header_size(headers):
@@ -95,14 +114,18 @@ def _decoded_header_size(headers):
     HPACK is measured against — not a guess, the cost of the same, already-
     decoded header list under the other protocol's framing.
 
-    The two numbers in header_bytes do not cover identical sets: `wire`
-    (see _consume_header_frames) counts the compressed :status pseudo-header
-    along with the real ones, because it cannot be separated from the HEADERS
-    frame bytes that carried it, while `decoded` here counts only the real
-    headers below — HTTP/1.1's status line is a different shape with no
-    comparable per-header byte cost. Both numbers are real measurements of
-    what they each describe; they are just not describing exactly the same
-    set of bytes.
+    The two numbers in header_bytes do not cover identical sets, but they do
+    both describe this one response and nothing else: `wire` (see
+    _consume_header_frames and fetch()'s block-resolution loop) is the byte
+    cost of the final response's own header block alone — any 1xx
+    informational blocks that preceded it and any trailer block that follows
+    the body are excluded — but it does count the compressed :status
+    pseudo-header, since that cannot be separated from the HEADERS frame
+    bytes that carried it. `decoded` here counts only the real headers
+    below, excluding :status, since HTTP/1.1's status line is a different
+    shape with no comparable per-header byte cost. Both numbers are real
+    measurements of what they each describe; they are just not describing
+    exactly the same set of bytes.
     """
     return sum(len(name) + 2 + len(value) + 2 for name, value in headers)
 
@@ -129,6 +152,15 @@ def fetcher(ctx):
 
     import h2.events
     import h2.exceptions
+    import h2.utilities
+
+    # h2 silently strips these before encoding a request -- RFC 7540 §8.1.2.2
+    # forbids connection-specific headers over HTTP/2, since a stream has no
+    # concept of connection lifecycle. Filtering against h2's own set (rather
+    # than a hand-picked list) keeps this structurally tied to what h2 will
+    # actually do, instead of a guess that only holds as long as h1's own
+    # header list happens not to grow one of these.
+    stripped_headers = {name.decode() for name in h2.utilities.CONNECTION_HEADERS}
 
     def fetch(url, sock):
         opened_here = sock is None
@@ -147,13 +179,14 @@ def fetcher(ctx):
                                (":path", request["target"]),
                                (":scheme", "https"),
                                (":authority", dict(request["headers"]).get("Host", ""))]
-            # "Host" becomes :authority above. "Connection" is an HTTP/1-only
-            # concept (this multiplexed connection stays open regardless);
-            # the h2 library silently strips it from what it actually
-            # encodes if it is sent, so it is left out here rather than kept
-            # in a "request" the response later claims was sent verbatim.
+            # "Host" becomes :authority above; the rest of stripped_headers
+            # (connection, transfer-encoding, upgrade, keep-alive,
+            # proxy-connection) h2 would silently drop from what it actually
+            # encodes even if sent, so they are left out here rather than
+            # kept in a "request" the response later claims was sent
+            # verbatim.
             request_headers += [(k.lower(), v) for k, v in request["headers"]
-                                if k.lower() not in ("host", "connection")]
+                                if k.lower() not in stripped_headers and k.lower() != "host"]
 
             stream_id = conn.get_next_available_stream_id()
             sock.settimeout(ctx.budget_for(ctx.timeout))
@@ -167,6 +200,8 @@ def fetcher(ctx):
             headers_done = False
             body = bytearray()
             header_wire_bytes = 0
+            open_block_bytes = 0
+            pending_blocks = []  # completed header blocks not yet resolved
             frame_tail = state["frame_tail"]
             ttfb = None
             done = False
@@ -178,9 +213,9 @@ def fetcher(ctx):
                     break
                 if not data:
                     break
-                counted, frame_tail, headers_done = _consume_header_frames(
-                    frame_tail + data, stream_id, headers_done)
-                header_wire_bytes += counted
+                completed, frame_tail, headers_done, open_block_bytes = _consume_header_frames(
+                    frame_tail + data, stream_id, headers_done, open_block_bytes)
+                pending_blocks.extend(completed)
                 try:
                     events = conn.receive_data(data)
                 except h2.exceptions.ProtocolError:
@@ -191,11 +226,22 @@ def fetcher(ctx):
                     # rather than a traceback.
                     break
                 for event in events:
-                    if isinstance(event, h2.events.ResponseReceived) and event.stream_id == stream_id:
+                    if isinstance(event, h2.events.InformationalResponseReceived) and event.stream_id == stream_id:
+                        # A 1xx block (e.g. 103 Early Hints) completed its own
+                        # header block before the final response's -- its
+                        # wire bytes were tallied into pending_blocks by the
+                        # frame walk above like any other block on our
+                        # stream, but it is not the response this trace
+                        # reports, so its bytes are discarded, not counted.
+                        if pending_blocks:
+                            pending_blocks.pop(0)
+                    elif isinstance(event, h2.events.ResponseReceived) and event.stream_id == stream_id:
                         if ttfb is None:
                             ttfb = round((time.perf_counter() - started) * 1000, 1)
                         response_headers = list(event.headers)
                         headers_seen = True
+                        if pending_blocks:
+                            header_wire_bytes += pending_blocks.pop(0)
                     elif isinstance(event, h2.events.DataReceived) and event.stream_id == stream_id:
                         body += event.data
                         conn.acknowledge_received_data(len(event.data), event.stream_id)
