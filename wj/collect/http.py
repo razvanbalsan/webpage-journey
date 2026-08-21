@@ -45,6 +45,18 @@ def decode_body(headers, body):
     dropped the header by the time it reaches here, and HTTP/2 has no such
     header at all.
     """
+    # If Transfer-Encoding: chunked is still present, the caller skipped the
+    # transport's dechunking step -- decoding these bytes as the body would
+    # silently produce a plausible-looking but wrong value (still-chunked
+    # framing decompressed or passed through as if it were content), with no
+    # absence marker to show it happened. That is a programming error in the
+    # caller, not a measurement to report, so this fails loudly instead of
+    # guessing.
+    if (header_value(headers, "transfer-encoding") or "").lower() == "chunked":
+        raise ValueError(
+            "decode_body received a still-chunked body -- the caller must "
+            "dechunk (see wj.transport.h1.parse_response) before calling this")
+
     # A decompression failure returns None for the decoded body, not the raw
     # (still-compressed) bytes under the same encoding label -- returning the
     # raw bytes made decoded == wire and produced a ~1.0 "compression ratio"

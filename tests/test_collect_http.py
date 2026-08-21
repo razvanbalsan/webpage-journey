@@ -61,6 +61,18 @@ def test_decode_body_passes_plain_bodies_through():
     assert encoding is None
 
 
+def test_decode_body_refuses_a_still_chunked_body_instead_of_guessing():
+    # decode_body's contract is that Transfer-Encoding is always already gone
+    # by the time it sees headers (h1.parse_response strips it after
+    # dechunking). A caller that skips that step is a programming error, and
+    # decoding the still-chunked bytes as if they were content would silently
+    # produce a plausible-looking but wrong value -- exactly the class of
+    # fabricated measurement this project forbids. Fail loudly instead.
+    headers = [("Transfer-Encoding", "chunked")]
+    with pytest.raises(ValueError):
+        http_collect.decode_body(headers, b"5\r\nhello\r\n0\r\n\r\n")
+
+
 def test_a_chunked_gzip_body_round_trips_through_parse_then_decode():
     payload = b"y" * 40
     blob = gzip.compress(payload)
