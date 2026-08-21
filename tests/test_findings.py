@@ -143,6 +143,24 @@ def test_alpn_gap_note_covers_a_protocol_this_build_never_offers():
     assert "h2" not in joined.split("h3")[0]   # h2 is not listed as a gap
 
 
+def test_alpn_gap_note_omits_the_used_clause_when_chosen_is_unmeasured():
+    # chosen is None whenever the handshake never reported a negotiated
+    # protocol -- a plain http:// run, or any run where TLS was not observed.
+    # The note must not guess what was used just because a gap exists.
+    trace = base_trace()
+    trace["dns"] = {"observed": True, "dnssec": "secure",
+                    "records": {"A": [{"data": "1.2.3.4", "ttl": 300}],
+                                "AAAA": [{"data": "::1", "ttl": 300}]},
+                    "alpn_advertised": ["h3", "h2"]}
+    trace["negotiation"] = {"observed": True, "advertised": ["h3", "h2"],
+                            "offered": ["h2", "http/1.1"], "unavailable": [],
+                            "chosen": None, "attempted": []}
+    findings.analyse(trace)
+    joined = " ".join(n["text"] for n in trace["notes"])
+    assert "h3" in joined
+    assert "this trace used" not in joined
+
+
 def test_analyse_is_idempotent_not_cumulative():
     trace = base_trace()
     trace["tls"] = {"observed": True, "chain": [{"days_left": 9, "subject_cn": "example.com"}],

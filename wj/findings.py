@@ -1,7 +1,7 @@
 """Turn a completed trace into the short list of things worth acting on."""
 
 from wj.collect.tls import grade_expiry
-from wj.schema import add_note
+from wj.schema import add_note, join_present
 
 POOR_GRADES = ("D", "E", "F")
 
@@ -76,17 +76,26 @@ def _analyse_negotiation(trace):
     missing_lib = [p for p in gaps if p in unavailable]
     unsupported = [p for p in gaps if p not in unavailable]
 
+    # chosen is unmeasured (None) whenever the handshake never reported a
+    # negotiated protocol -- a plain http:// run, or TLS not observed. The
+    # "this trace used ..." clause is real information when we have it and
+    # must simply not appear when we don't; substituting a fallback here
+    # would publish a value nothing measured, so the clause is omitted
+    # rather than defaulted.
+    chosen = negotiation.get("chosen")
+    used = f"this trace used {chosen}" if chosen else None
+
     if missing_lib:
         add_note(trace, "info", "negotiation",
-                 f"this host advertises {', '.join(missing_lib)}, but the library "
-                 f"needed to speak it is not installed — this trace used "
-                 f"{negotiation.get('chosen') or 'HTTP/1.1'}")
+                 join_present([
+                     f"this host advertises {', '.join(missing_lib)}, but the library "
+                     f"needed to speak it is not installed", used], sep=" — "))
 
     if unsupported:
         add_note(trace, "info", "negotiation",
-                 f"this host advertises {', '.join(unsupported)}, which this tool "
-                 f"does not speak — this trace used "
-                 f"{negotiation.get('chosen') or 'HTTP/1.1'}")
+                 join_present([
+                     f"this host advertises {', '.join(unsupported)}, which this tool "
+                     f"does not speak", used], sep=" — "))
 
 
 def _analyse_http(trace):

@@ -127,7 +127,7 @@
     {
       "severity": "info",
       "section": "negotiation",
-      "text": "this host advertises h3, which this tool does not speak \u2014 this trace used HTTP/1.1"
+      "text": "this host advertises h3, which this tool does not speak"
     },
     {
       "severity": "warn",
