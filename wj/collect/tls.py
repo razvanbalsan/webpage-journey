@@ -29,11 +29,22 @@ EXPIRY_WARN_DAYS = 21
 # ssl.SSLSocket.getpeercert()'s dict has no equivalent for any of these.
 FIELDS_NEEDING_CRYPTOGRAPHY = ("key", "sig_algo", "scts", "is_ca")
 
-# We offer only HTTP/1.1 because that is the only framing wj/collect/http.py
-# writes. Offering h2 would make most servers agree to it and then fail on the
-# HTTP/1.1 text we send. What the host *supports* is measured separately and
-# more reliably from its DNS HTTPS record (dns.alpn_advertised).
+# Offered over ALPN when negotiation has not run (redirect hops, direct calls).
+# The negotiate collector overrides this per run.
 ALPN_PROTOCOLS = ["http/1.1"]
+
+
+def alpn_for(ctx):
+    """What this run offers over ALPN, as decided by the negotiate collector."""
+    negotiation = ctx.results.get("negotiation", {})
+    if negotiation.get("observed"):
+        offered = negotiation.get("offered")
+        # A deliberate empty offer (negotiate.choose() returns [] for plain
+        # HTTP, where ALPN does not apply at all) must stay empty, not be
+        # silently upgraded to the fallback -- only a genuinely absent key
+        # falls back to ALPN_PROTOCOLS.
+        return list(offered) if offered is not None else list(ALPN_PROTOCOLS)
+    return list(ALPN_PROTOCOLS)
 
 
 def _peercert_name_component(rdns, attr):
@@ -276,7 +287,7 @@ def collect(ctx):
         return unobserved("no TCP connection to negotiate over")
 
     context = ssl.create_default_context()
-    context.set_alpn_protocols(ALPN_PROTOCOLS)
+    context.set_alpn_protocols(alpn_for(ctx))
     sock.settimeout(ctx.budget_for(ctx.timeout))
 
     started = time.perf_counter()

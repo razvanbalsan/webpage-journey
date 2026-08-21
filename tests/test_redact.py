@@ -3,10 +3,20 @@ import ipaddress
 import json
 import re
 
+import pytest
+
 from wj import findings, redact, schema
 
 
-def sample_trace():
+# A why_not in the exact shape wj/run.py builds for a collector that raised:
+# f"{type(exc).__name__}: {exc}". The OS wrote the address into its own error
+# message; nothing filtered it. No OBSERVED section can carry a string like
+# this, which is precisely why the leak fixture needs an unobserved variant.
+UNOBSERVED_WHY_NOT = ("OSError: [Errno 65] No route to host 192.168.1.1 "
+                      "via gateway aa:bb:cc:dd:ee:ff")
+
+
+def sample_trace(protocol="http/1.1", unobserved=None):
     """A real trace document, assembled the same way orchestrate() does it.
 
     Built from schema.new_trace(...) with every section populated, then run
@@ -17,6 +27,23 @@ def sample_trace():
     "does the redacted document still contain X" never even had X to find in
     the first place. test_the_leak_fixture_populates_every_section below
     makes an incomplete fixture fail loudly instead of silently.
+
+    `protocol="h2"` swaps in the h2 shape of the fields Task 4 added
+    (negotiation.chosen, http.hops[].stream_id, http.final.header_bytes) --
+    one fixture cannot coherently be both an h1 and an h2 trace (h2's own
+    stream_id is an int, header_bytes a dict of ints, chosen "h2", none of
+    which the http/1.1 variant ever produces), and a leak walker that only
+    ever sees the empty/None h1 variant of those fields has never actually
+    walked over populated instances of them.
+
+    `unobserved="path"` (or any section name) replaces that section with a
+    real unobserved one, carrying the kind of why_not wj/run.py actually
+    produces. Every other variant of this fixture has every section observed
+    -- which meant the leak walker could never reach a why_not string AT ALL,
+    while wj/run.py was turning arbitrary exception text into exactly that
+    field. That is this project's documented three-time failure mode in its
+    exact shape: a guard proving the observed path clean while structurally
+    excluding the channel that carries uncontrolled text.
     """
     trace = schema.new_trace(
         target={"input": "https://example.com/", "host": "example.com",
@@ -45,6 +72,27 @@ def sample_trace():
         alpn_advertised=[], ech=False,
         timing_ms={"cold": 12.0, "warm": 1.0, "survey_ms": 30.0})
 
+    if protocol == "h2":
+        trace["negotiation"] = schema.observed(
+            advertised=["h2"], offered=["h2", "http/1.1"], signal="HTTPS record",
+            unavailable=[], chosen="h2",
+            # See the module docstring above re: attempted staying [] in
+            # Phase 1 -- true for both variants, not just the h1 one.
+            attempted=[])
+    else:
+        trace["negotiation"] = schema.observed(
+            advertised=[], offered=["http/1.1"], signal="no HTTPS record",
+            unavailable=[], chosen="http/1.1",
+            # Phase 1 never populates this -- there is no fallback ladder yet (see
+            # wj/collect/negotiate.py and Task 4's brief), so every real trace this
+            # tool can currently produce carries attempted=[] structurally, the
+            # same as advertised/offered/unavailable can each independently be
+            # empty. Nothing here can leak an identifier because nothing here is
+            # ever populated; Phase 2 is what gives this field per-attempt records
+            # (see .superpowers/sdd/2026-08-21-http2-phase1/task-8-brief.md) and
+            # is also what must extend this fixture once it does.
+            attempted=[])
+
     trace["tcp"] = schema.observed(
         candidates=[{"ip": "93.184.216.34", "family": "ipv4", "connect_ms": 12.4, "error": None}],
         chosen={"ip": "93.184.216.34", "family": "ipv4", "port": 443},
@@ -52,7 +100,7 @@ def sample_trace():
         kernel={"rtt_ms": 12.4, "mss": 1460, "retransmits": 0, "source": "TCP_INFO"})
 
     trace["tls"] = schema.observed(
-        version="TLSv1.3", cipher="TLS_AES_128_GCM_SHA256", alpn="http/1.1",
+        version="TLSv1.3", cipher="TLS_AES_128_GCM_SHA256", alpn=protocol,
         handshake_ms=38.2,
         chain=[{"subject_cn": "example.com", "issuer_cn": "R3", "issuer_org": "Let's Encrypt",
                 "not_before": "2026-06-01T00:00:00+00:00", "not_after": "2026-08-30T00:00:00+00:00",
@@ -61,18 +109,40 @@ def sample_trace():
         trust_root="ISRG Root X1", verified=True, caa_match=True,
         resumption={"tested": False}, legacy_versions_accepted=[])
 
-    trace["http"] = schema.observed(
-        hops=[], redirect_limit_reached=False,
-        final={"url": "https://example.com/", "status": 200, "reason": "OK",
-               "protocol": "HTTP/1.1", "headers": [["content-type", "text/html"]],
-               "ttfb_ms": 88.0, "total_ms": 109.0, "wire_bytes": 14000, "decoded_bytes": 61000,
-               "encoding": "gzip", "ratio": 4.36, "content_type": "text/html"},
-        cache={"state": None, "age": None, "header": None, "directives": None},
-        cdn=None,
-        security={"grade": "A", "present": {}, "missing": [],
-                 "cookies": [{"name": "s", "secure": True, "httponly": True, "samesite": "Lax"}],
-                 "scheme": "https"},
-        conditional={"tested": False})
+    if protocol == "h2":
+        trace["http"] = schema.observed(
+            hops=[{"url": "https://example.com/", "status": 301,
+                  "location": "https://example.com/next", "protocol": "HTTP/2",
+                  "ttfb_ms": 12.0, "connection_reused": False, "stream_id": 1}],
+            redirect_limit_reached=False,
+            final={"url": "https://example.com/next", "status": 200, "reason": None,
+                   "protocol": "HTTP/2", "headers": [["content-type", "text/html"]],
+                   "ttfb_ms": 88.0, "total_ms": 109.0, "wire_bytes": 14000, "decoded_bytes": 61000,
+                   "encoding": "gzip", "ratio": 4.36, "content_type": "text/html",
+                   "header_bytes": {"wire": 812, "decoded": 1400}},
+            cache={"state": None, "age": None, "header": None, "directives": None},
+            cdn=None,
+            security={"grade": "A", "present": {}, "missing": [],
+                     "cookies": [{"name": "s", "secure": True, "httponly": True, "samesite": "Lax"}],
+                     "scheme": "https"},
+            conditional={"tested": False})
+    else:
+        trace["http"] = schema.observed(
+            hops=[{"url": "http://example.com/", "status": 301,
+                  "location": "https://example.com/", "protocol": "HTTP/1.1",
+                  "ttfb_ms": 12.0, "connection_reused": False, "stream_id": None}],
+            redirect_limit_reached=False,
+            final={"url": "https://example.com/", "status": 200, "reason": "OK",
+                   "protocol": "HTTP/1.1", "headers": [["content-type", "text/html"]],
+                   "ttfb_ms": 88.0, "total_ms": 109.0, "wire_bytes": 14000, "decoded_bytes": 61000,
+                   "encoding": "gzip", "ratio": 4.36, "content_type": "text/html",
+                   "header_bytes": None},
+            cache={"state": None, "age": None, "header": None, "directives": None},
+            cdn=None,
+            security={"grade": "A", "present": {}, "missing": [],
+                     "cookies": [{"name": "s", "secure": True, "httponly": True, "samesite": "Lax"}],
+                     "scheme": "https"},
+            conditional={"tested": False})
 
     trace["path"] = schema.observed(
         source="traceroute",
@@ -85,13 +155,17 @@ def sample_trace():
     trace["timings"] = {"waterfall": [{"label": "DNS", "start_ms": 0.0, "end_ms": 12.0}],
                         "total_ms": 109.0}
 
+    if unobserved:
+        trace[unobserved] = schema.unobserved(UNOBSERVED_WHY_NOT)
+
     # Real pipeline order (wj.run.orchestrate): analyse before build_osi.
     findings.analyse(trace)
     trace["osi"] = schema.build_osi(trace)
     return trace
 
 
-def test_the_leak_fixture_populates_every_section():
+@pytest.mark.parametrize("protocol", ["http/1.1", "h2"])
+def test_the_leak_fixture_populates_every_section(protocol):
     # A prior version of this assertion checked set(sample_trace()) >=
     # set(schema.new_trace(...)) -- but since sample_trace() is now built
     # FROM schema.new_trace(...), that containment holds by construction and
@@ -101,12 +175,29 @@ def test_the_leak_fixture_populates_every_section():
     # assertion still passed). Checking every section is actually observed --
     # not merely present as a key -- is what makes an incomplete fixture fail
     # loudly, which is the whole point of this test.
-    trace = sample_trace()
+    trace = sample_trace(protocol)
     assert all(trace[s]["observed"] for s in schema.SECTIONS)
 
 
-def test_sample_trace_validates():
-    assert schema.validate(sample_trace()) == []
+@pytest.mark.parametrize("name", schema.SECTIONS)
+def test_the_unobserved_leak_fixture_puts_an_identifier_in_a_why_not(name):
+    # The other direction, and the one that makes the walker test below prove
+    # something: the unobserved variant must actually carry an identifier in
+    # its why_not, or a fixture that quietly stopped doing so would let
+    # redact_trace() pass by having nothing to find.
+    trace = sample_trace(unobserved=name)
+    assert trace[name]["observed"] is False
+    # Specifically in the why_not string itself -- the unredacted fixture
+    # leaks in a dozen other places by design, so a bare "find_leaks() found
+    # something" would pass no matter what this variant carried.
+    why_not = trace[name]["why_not"]
+    assert any(text == why_not for text, _offender in find_leaks(trace)), \
+        f"{name} why_not no longer carries an identifier"
+
+
+@pytest.mark.parametrize("protocol", ["http/1.1", "h2"])
+def test_sample_trace_validates(protocol):
+    assert schema.validate(sample_trace(protocol)) == []
 
 
 def test_redacts_local_identifiers():
@@ -154,6 +245,88 @@ def test_redacts_a_private_dns_resolver_but_keeps_a_public_one():
     out = redact.redact_trace(sample_trace())
     assert out["dns"]["resolver"]["servers"][0] == redact.REDACTED
     assert out["dns"]["resolver"]["servers"][1] == "1.1.1.1"
+
+
+def test_the_structural_walker_reaches_the_negotiation_section():
+    # negotiation.signal is currently always one of a handful of fixed
+    # strings from wj/collect/negotiate.py that never embed an identifier --
+    # but adding a section is exactly when a fixture-blind leak has
+    # previously gone unnoticed on this project, so this proves redact_trace
+    # actually reaches into negotiation rather than skipping it entirely.
+    trace = sample_trace()
+    trace["negotiation"]["signal"] = "HTTPS record via 192.168.1.1"
+    out = redact.redact_trace(trace)
+    leaked = [s for s in _iter_strings(out) if "192.168.1.1" in s]
+    assert not leaked, leaked
+
+
+# Every hole a re-review found in _scrub_embedded_identifiers()
+# (wj/redact.py), planted into negotiation.signal the same way the test
+# above does. A prior round of this fix had no test touching the scrubber
+# beyond the plain-private-IPv4 case above, which even a fail-open,
+# IPv4-only, no-IPv6 implementation already passed -- "347 passed" on a
+# scrubber with three open holes.
+#
+# Exact string equality, not a substring-absence check: an earlier version
+# of this test asserted only that the full original address (e.g.
+# "192.168.1.1") no longer appeared anywhere, which a PARTIAL leak sails
+# straight through -- the actual regression this round fixed left
+# "[redacted at export].168.1.1" behind (the leading "192" consumed by an
+# over-matching IPv6 alternative, the trailing ".168.1.1" then too short to
+# match _IPV4_RE at all), and "192.168.1.1" is indeed not a substring of
+# that, so a not-in check on the whole address would have passed right over
+# it. It is also not IPv4-shaped, so the structural walker (find_leaks,
+# below) cannot see it either -- exact equality is the only check precise
+# enough to catch a truncation like this.
+SIGNAL_SCRUB_CASES = (
+    ("operator's own public IP",
+     "HTTPS record via 81.180.20.7",
+     "HTTPS record via [redacted at export]"),
+    ("leading-zero IPv4 (unparseable by ipaddress)",
+     "HTTPS record via 192.168.01.1",
+     "HTTPS record via [redacted at export]"),
+    ("link-local IPv6",
+     "HTTPS record via fe80::1",
+     "HTTPS record via [redacted at export]"),
+    ("global IPv6",
+     "HTTPS record via 2001:db8::1",
+     "HTTPS record via [redacted at export]"),
+    ("IPv4-mapped IPv6",
+     "HTTPS record via ::ffff:192.168.1.1",
+     "HTTPS record via [redacted at export]:[redacted at export]"),
+    ("IPv4-mapped IPv6, uppercase prefix, public octets",
+     "HTTPS record via ::FFFF:81.180.20.7",
+     "HTTPS record via [redacted at export]:[redacted at export]"),
+    ("hyphen-separated MAC",
+     "iface A4-83-E7-1B-2C-3D",
+     "iface [redacted at export]"),
+    ("Cisco dot-quad MAC",
+     "iface a483.e71b.2c3d",
+     "iface [redacted at export]"),
+    # A re-review found these two uncovered: every existing IPv6 case above
+    # ends in a real group (":1"), so \b fires and both passed even under
+    # the pre-fix \b-anchored pattern -- neither exercises the \b ->
+    # (?![0-9a-fA-F:]) half of that fix. And MAC previously ran before
+    # IPv4/IPv6 (see _scrub_embedded_identifiers()'s ordering comment): its
+    # exactly-2-hex-digit-group colon form consumed the first six groups of
+    # this ULA, an all-two-digit-group IPv6 address, leaving the last two
+    # groups -- unparseable alone, so find_leaks() can't see the residue --
+    # unredacted.
+    ("::-terminated IPv6",
+     "HTTPS record via 2001:db8::",
+     "HTTPS record via [redacted at export]"),
+    ("all-two-hex-digit-group IPv6 ULA (fd00::/8, non-global)",
+     "HTTPS record via fd12:34:56:78:9a:bc:de:f0",
+     "HTTPS record via [redacted at export]"),
+)
+
+
+@pytest.mark.parametrize("label, planted, expected", SIGNAL_SCRUB_CASES)
+def test_the_negotiation_signal_scrubber_closes_every_known_hole(label, planted, expected):
+    trace = sample_trace()
+    trace["negotiation"]["signal"] = planted
+    out = redact.redact_trace(trace)
+    assert out["negotiation"]["signal"] == expected, label
 
 
 LEAKED_IDENTIFIERS = ("aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66",
@@ -270,22 +443,70 @@ def find_leaks(document):
     return violations
 
 
-def test_redacted_document_has_no_mac_or_private_ip_anywhere_structurally():
-    out = redact.redact_trace(sample_trace())
+@pytest.mark.parametrize("name", schema.SECTIONS)
+def test_redacted_document_has_no_leak_from_an_unobserved_sections_why_not(name):
+    # The walker, run over a document that actually HAS a why_not to walk --
+    # for every section, since each has its own unobserved path.
+    out = redact.redact_trace(sample_trace(unobserved=name))
     leaks = find_leaks(out)
     assert leaks == [], leaks
 
 
-def test_structural_leak_walker_catches_a_ula_ipv6_address_planted_in_a_note():
-    # redact.redact_trace() only ever touches the structured local/tcp/dns/path
-    # fields -- it does not scrub free-text note content at all. Planting a
-    # ULA IPv6 address in a note demonstrates the one channel the general
-    # redaction path cannot reach, and proves the walker itself (once IPv6
-    # matching exists) still catches it there.
+@pytest.mark.parametrize("protocol", ["http/1.1", "h2"])
+def test_redacted_document_has_no_mac_or_private_ip_anywhere_structurally(protocol):
+    # Walked for both variants: the h2 shape of the fields Task 4 added
+    # (stream_id as an int, header_bytes as a dict of ints, chosen: "h2")
+    # never reaches this walker under the http/1.1-only fixture, since those
+    # fields are None/absent there -- an all-empty variant is exactly the
+    # "fixture never populated the section that was leaking" pattern this
+    # project has been burned by three times before.
+    out = redact.redact_trace(sample_trace(protocol))
+    leaks = find_leaks(out)
+    assert leaks == [], leaks
+
+
+def test_the_walker_itself_still_sees_a_ula_ipv6_address_in_a_note():
+    # The walker's own self-test, on an UNREDACTED document: it must be able
+    # to see a ULA IPv6 address wherever it sits, or every "no leaks" result
+    # it reports below is worthless. (This used to run over the REDACTED
+    # document and assert the leak survived, pinning redact_trace()'s failure
+    # to scrub notes as if it were intended behaviour.)
+    trace = sample_trace()
+    trace["notes"].append({"severity": "info", "section": "path",
+                           "text": "a hop responded from fd12:3456:789a::1"})
+    leaks = find_leaks(trace)
+    assert any("fd12:3456:789a::1" == offender for _text, offender in leaks), leaks
+
+
+def test_a_note_carrying_an_identifier_is_scrubbed_not_published():
+    # notes[].text is free text assembled by wj/findings.py from section
+    # values, copied verbatim into the export and onto the page. It went out
+    # entirely unscrubbed while negotiation.signal -- the one free-text field
+    # whose producer provably cannot embed an identifier -- was the only
+    # field _scrub_embedded_identifiers() was ever applied to.
     trace = sample_trace()
     trace["notes"].append({"severity": "info", "section": "path",
                            "text": "a hop responded from fd12:3456:789a::1"})
     out = redact.redact_trace(trace)
 
-    leaks = find_leaks(out)
-    assert any("fd12:3456:789a::1" == offender for _text, offender in leaks), leaks
+    assert out["notes"][-1]["text"] == f"a hop responded from {redact.REDACTED}"
+    assert find_leaks(out) == []
+
+
+@pytest.mark.parametrize("planted, survivor", [
+    ("OSError: [Errno 65] No route to host 192.168.1.1", "No route to host"),
+    ("timeout reaching fd12:3456:789a::1", "timeout reaching"),
+    ("arp said the gateway is aa:bb:cc:dd:ee:ff", "arp said the gateway is"),
+])
+def test_an_unobserved_sections_why_not_is_scrubbed_not_published(planted, survivor):
+    # wj/run.py renders ANY collector exception as f"{type(exc).__name__}:
+    # {exc}" -- arbitrary text from a socket, a resolver, or the OS, straight
+    # into the exported document. The rest of the message is a real
+    # measurement of what went wrong and must survive; only the identifier goes.
+    trace = sample_trace()
+    trace["path"] = schema.unobserved(planted)
+    out = redact.redact_trace(trace)
+
+    assert survivor in out["path"]["why_not"]
+    assert redact.REDACTED in out["path"]["why_not"]
+    assert find_leaks(out) == []

@@ -79,10 +79,24 @@ def test_help_documents_redaction_default():
     assert "--no-redact" in help_text
 
 
-def test_help_documents_the_http1_1_limitation():
+def test_help_documents_protocol_negotiation():
     help_text = build_parser().format_help()
-    assert "HTTP/1.1" in help_text
-    assert "ALPN" in help_text
+    # Specific enough to actually fail if the epilog regresses back to the
+    # old "speaks only HTTP/1.1" claim -- that older text also contained the
+    # substrings "HTTP/1.1" and "ALPN" this test used to check for, so it
+    # could never have caught its own removal.
+    assert "offers h2 over ALPN" in help_text
+    assert "falls back to HTTP/1.1" in help_text
+    assert "speaks only HTTP/1.1" not in help_text
+    # A re-review caught that this test's assertions all locked the FIRST
+    # round's wording, which still overclaimed that every trace measures
+    # negotiation.chosen -- untrue for a --no-tls run or a handshake that
+    # completes without an ALPN selection (wj/collect/http.py only fills it
+    # `if alpn`). Reverting just the qualifying sentence below, while
+    # leaving the assertions above intact, would have passed unnoticed.
+    assert "--no-tls run" in help_text
+    assert "leaves it unmeasured" in help_text
+    assert "every trace reports which protocol was used" not in help_text
 
 
 def test_help_keeps_the_authorisation_line():

@@ -6,8 +6,8 @@
     "version": "2.2.0"
   },
   "target": {
-    "input": "https://plain.example.net/",
-    "host": "plain.example.net",
+    "input": "https://h2.example.net/",
+    "host": "h2.example.net",
     "scheme": "https",
     "port": 443,
     "path": "/"
@@ -34,30 +34,30 @@
       {
         "label": "DNS",
         "start_ms": 0.0,
-        "end_ms": 41.2
+        "end_ms": 39.5
       },
       {
         "label": "TCP",
-        "start_ms": 41.2,
-        "end_ms": 53.6
+        "start_ms": 39.5,
+        "end_ms": 51.3
       },
       {
         "label": "TLS",
-        "start_ms": 53.6,
-        "end_ms": 91.8
+        "start_ms": 51.3,
+        "end_ms": 86.9
       },
       {
         "label": "TTFB",
-        "start_ms": 91.8,
-        "end_ms": 179.8
+        "start_ms": 86.9,
+        "end_ms": 97.4
       },
       {
         "label": "Download",
-        "start_ms": 179.8,
-        "end_ms": 200.8
+        "start_ms": 97.4,
+        "end_ms": 112.9
       }
     ],
-    "total_ms": 200.8
+    "total_ms": 112.9
   },
   "osi": {
     "l1": {
@@ -83,32 +83,31 @@
     "l3": {
       "observed": true,
       "facts": [
-        "192.168.1.23 \u2192 104.16.132.229",
+        "192.168.1.23 \u2192 151.101.65.195",
         "NAT: 192.168.1.23 appears as 81.180.20.7",
-        "4 hops",
-        "AS8708 \u2192 AS13335"
+        "3 hops",
+        "AS54113"
       ],
       "why_not": null,
-      "test_command": "ping 104.16.132.229"
+      "test_command": "ping 151.101.65.195"
     },
     "l4": {
       "observed": true,
       "facts": [
-        "TCP :54213 \u2192 :443",
-        "RTT 12.4 ms",
+        "TCP :54290 \u2192 :443",
+        "RTT 11.8 ms",
         "MSS 1460",
         "0 retransmits",
         "ipv4 won the connection race"
       ],
       "why_not": null,
-      "test_command": "nc -vz plain.example.net 443"
+      "test_command": "nc -vz h2.example.net 443"
     },
     "l5": {
       "observed": true,
       "facts": [
         "TLS session established",
-        "1 request over this connection",
-        "1 redirect(s), each on a new connection"
+        "2 of 2 request(s) after the first reused the connection"
       ],
       "why_not": null,
       "test_command": null
@@ -117,61 +116,31 @@
       "observed": true,
       "facts": [
         "TLSv1.3 \u00b7 TLS_AES_128_GCM_SHA256",
-        "ALPN http/1.1",
-        "gzip: 14000 bytes \u2192 61000 bytes (4.36:1)",
+        "ALPN h2",
+        "gzip: 9800 bytes \u2192 41160 bytes (4.2:1)",
         "text/html"
       ],
       "why_not": null,
-      "test_command": "openssl s_client -connect plain.example.net:443 -servername plain.example.net"
+      "test_command": "openssl s_client -connect h2.example.net:443 -servername h2.example.net"
     },
     "l7": {
       "observed": true,
       "facts": [
-        "negotiated http/1.1 over ALPN",
-        "HTTP/1.1 \u2192 200",
-        "1 redirect(s) followed",
-        "DNS: plain.example.net \u2192 104.16.132.229",
-        "resolved via 1.1.1.1, DNSSEC insecure"
+        "negotiated h2 over ALPN",
+        "HTTP/2 \u2192 200",
+        "2 redirect(s) followed",
+        "DNS: h2.example.net \u2192 151.101.65.195",
+        "resolved via 1.1.1.1, DNSSEC secure"
       ],
       "why_not": null,
-      "test_command": "curl -sSI https://plain.example.net/"
+      "test_command": "curl -sSI https://h2.example.net/"
     }
   },
   "notes": [
     {
       "severity": "info",
       "section": "dns",
-      "text": "DNSSEC is not signed for this zone \u2014 answers cannot be authenticated"
-    },
-    {
-      "severity": "info",
-      "section": "dns",
-      "text": "no AAAA record \u2014 this host is unreachable over IPv6-only networks"
-    },
-    {
-      "severity": "info",
-      "section": "dns",
       "text": "no HTTP/3 advertised in the HTTPS record \u2014 clients cannot use QUIC on the first connection"
-    },
-    {
-      "severity": "warn",
-      "section": "tls",
-      "text": "certificate expires in 10 days"
-    },
-    {
-      "severity": "warn",
-      "section": "tls",
-      "text": "the presented issuer is not listed in the zone's CAA records"
-    },
-    {
-      "severity": "warn",
-      "section": "http",
-      "text": "redirect hop http://plain.example.net/ travelled in plaintext before the upgrade"
-    },
-    {
-      "severity": "warn",
-      "section": "http",
-      "text": "security header grade F \u2014 missing: Strict-Transport-Security, Content-Security-Policy, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, Cross-Origin-Opener-Policy"
     }
   ],
   "local": {
@@ -198,11 +167,16 @@
     "records": {
       "A": [
         {
-          "data": "104.16.132.229",
+          "data": "151.101.65.195",
           "ttl": 300
         }
       ],
-      "AAAA": [],
+      "AAAA": [
+        {
+          "data": "2a04:4e42::645",
+          "ttl": 300
+        }
+      ],
       "CNAME": [],
       "MX": [],
       "NS": [
@@ -224,7 +198,12 @@
           "ttl": 3600
         }
       ],
-      "HTTPS": []
+      "HTTPS": [
+        {
+          "data": "1 . alpn=\"h2\"",
+          "ttl": 300
+        }
+      ]
     },
     "records_failed": [],
     "resolver": {
@@ -233,7 +212,7 @@
       ],
       "source": "scutil"
     },
-    "dnssec": "insecure",
+    "dnssec": "secure",
     "delegation": [
       {
         "level": "root",
@@ -260,46 +239,51 @@
         ]
       }
     ],
-    "alpn_advertised": [],
+    "alpn_advertised": [
+      "h2"
+    ],
     "ech": false,
     "timing_ms": {
-      "cold": 41.2,
-      "warm": 1.1
+      "cold": 39.5,
+      "warm": 1.0
     }
   },
   "negotiation": {
     "observed": true,
-    "advertised": [],
+    "advertised": [
+      "h2"
+    ],
     "offered": [
+      "h2",
       "http/1.1"
     ],
-    "signal": "no HTTPS record",
+    "signal": "HTTPS record",
     "unavailable": [],
-    "chosen": "http/1.1",
+    "chosen": "h2",
     "attempted": []
   },
   "tcp": {
     "observed": true,
     "candidates": [
       {
-        "ip": "104.16.132.229",
+        "ip": "151.101.65.195",
         "family": "ipv4",
-        "connect_ms": 12.4,
+        "connect_ms": 11.8,
         "error": null
       }
     ],
     "chosen": {
-      "ip": "104.16.132.229",
+      "ip": "151.101.65.195",
       "family": "ipv4",
       "port": 443
     },
     "winner_family": "ipv4",
     "local": {
       "ip": "192.168.1.23",
-      "port": 54213
+      "port": 54290
     },
     "kernel": {
-      "rtt_ms": 12.4,
+      "rtt_ms": 11.8,
       "mss": 1460,
       "retransmits": 0,
       "source": "TCP_INFO"
@@ -309,35 +293,34 @@
     "observed": true,
     "version": "TLSv1.3",
     "cipher": "TLS_AES_128_GCM_SHA256",
-    "alpn": "http/1.1",
-    "handshake_ms": 38.2,
+    "alpn": "h2",
+    "handshake_ms": 35.6,
     "chain": [
       {
-        "subject_cn": "plain.example.net",
-        "issuer_cn": "DigiCert Global G2 TLS RSA SHA256 2020 CA1",
-        "issuer_org": "DigiCert Inc",
-        "not_before": "2026-06-01T00:00:00+00:00",
-        "not_after": "2026-08-30T00:00:00+00:00",
-        "days_left": 10,
+        "subject_cn": "h2.example.net",
+        "issuer_cn": "R11",
+        "issuer_org": "Let's Encrypt",
+        "not_before": "2026-07-01T00:00:00+00:00",
+        "not_after": "2026-11-01T00:00:00+00:00",
+        "days_left": 73,
         "key": {
           "type": "EC",
           "bits": 256
         },
         "sig_algo": "ecdsa-with-SHA256",
         "sans": [
-          "plain.example.net",
-          "www.plain.example.net"
+          "h2.example.net"
         ],
         "scts": 2,
         "ocsp": [
-          "http://ocsp.digicert.com"
+          "http://r11.o.lencr.org"
         ],
         "is_ca": false,
         "unmeasured": []
       },
       {
-        "subject_cn": "DigiCert Global G2 TLS RSA SHA256 2020 CA1",
-        "issuer_cn": "DigiCert Global Root G2",
+        "subject_cn": "R11",
+        "issuer_cn": "ISRG Root X1",
         "issuer_org": null,
         "not_before": "2024-03-13T00:00:00+00:00",
         "not_after": "2027-03-13T00:00:00+00:00",
@@ -350,16 +333,16 @@
         "sans": [],
         "scts": 0,
         "ocsp": [
-          "http://ocsp.digicert.com"
+          "http://x1.i.lencr.org/"
         ],
         "is_ca": true,
         "unmeasured": []
       }
     ],
     "chain_unparsed": 0,
-    "trust_root": "DigiCert Global G2 TLS RSA SHA256 2020 CA1",
+    "trust_root": "R11",
     "verified": true,
-    "caa_match": false,
+    "caa_match": null,
     "resumption": {
       "tested": false
     },
@@ -369,21 +352,30 @@
     "observed": true,
     "hops": [
       {
-        "url": "http://plain.example.net/",
+        "url": "https://h2.example.net/",
         "status": 301,
-        "location": "https://plain.example.net/",
-        "protocol": "HTTP/1.1",
-        "ttfb_ms": 40.1,
+        "location": "https://h2.example.net/en/",
+        "protocol": "HTTP/2",
+        "ttfb_ms": 22.4,
         "connection_reused": false,
-        "stream_id": null
+        "stream_id": 1
+      },
+      {
+        "url": "https://h2.example.net/en/",
+        "status": 302,
+        "location": "https://h2.example.net/en/index.html",
+        "protocol": "HTTP/2",
+        "ttfb_ms": 9.8,
+        "connection_reused": true,
+        "stream_id": 3
       }
     ],
     "redirect_limit_reached": false,
     "final": {
-      "url": "https://plain.example.net/",
+      "url": "https://h2.example.net/en/index.html",
       "status": 200,
-      "reason": "OK",
-      "protocol": "HTTP/1.1",
+      "reason": null,
+      "protocol": "HTTP/2",
       "headers": [
         [
           "content-type",
@@ -395,71 +387,82 @@
         ],
         [
           "cache-control",
-          "max-age=300"
+          "max-age=600"
         ]
       ],
       "request": {
         "method": "GET",
-        "target": "/",
-        "http_version": "HTTP/1.1",
+        "target": "/en/index.html",
+        "http_version": "HTTP/2",
         "headers": [
           [
-            "Host",
-            "plain.example.net"
+            ":method",
+            "GET"
           ],
           [
-            "User-Agent",
+            ":path",
+            "/en/index.html"
+          ],
+          [
+            ":scheme",
+            "https"
+          ],
+          [
+            ":authority",
+            "h2.example.net"
+          ],
+          [
+            "user-agent",
             "webpage-journey/2.0"
           ],
           [
-            "Accept-Encoding",
+            "accept-encoding",
             "gzip, deflate"
           ],
           [
-            "Accept",
+            "accept",
             "*/*"
-          ],
-          [
-            "Connection",
-            "close"
           ]
         ]
       },
-      "ttfb_ms": 88.0,
-      "total_ms": 109.0,
-      "wire_bytes": 14000,
-      "decoded_bytes": 61000,
+      "ttfb_ms": 10.5,
+      "total_ms": 26.0,
+      "wire_bytes": 9800,
+      "decoded_bytes": 41160,
       "encoding": "gzip",
-      "ratio": 4.36,
+      "ratio": 4.2,
       "content_type": "text/html",
-      "header_bytes": null,
-      "stream_id": null,
-      "connection_reused": false
+      "header_bytes": {
+        "wire": 36,
+        "decoded": 92
+      },
+      "stream_id": 5,
+      "connection_reused": true
     },
     "cache": {
       "state": null,
       "age": null,
       "header": null,
-      "directives": "max-age=300"
+      "directives": "max-age=600"
     },
     "cdn": null,
     "security": {
-      "grade": "F",
-      "present": {},
-      "missing": [
-        "Strict-Transport-Security",
-        "Content-Security-Policy",
-        "X-Content-Type-Options",
-        "Referrer-Policy",
-        "Permissions-Policy",
-        "Cross-Origin-Opener-Policy"
-      ],
+      "grade": "A",
+      "present": {
+        "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+        "Content-Security-Policy": "default-src 'self'",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "geolocation=()",
+        "Cross-Origin-Opener-Policy": "same-origin"
+      },
+      "missing": [],
       "cookies": [
         {
           "name": "session",
           "secure": true,
           "httponly": true,
-          "samesite": "Lax"
+          "samesite": "Strict"
         }
       ],
       "scheme": "https"
@@ -476,38 +479,29 @@
         "ttl": 1,
         "ip": "192.168.1.1",
         "rdns": "router.lan",
-        "rtt_ms": 1.2,
+        "rtt_ms": 1.1,
         "asn": null,
         "prefix": null
       },
       {
         "ttl": 2,
-        "ip": null,
-        "rdns": null,
-        "rtt_ms": null,
-        "asn": null,
-        "prefix": null
-      },
-      {
-        "ttl": 3,
-        "ip": "203.0.113.9",
-        "rdns": "ae-1.border.example.net",
-        "rtt_ms": 14.5,
-        "asn": 8708,
+        "ip": "203.0.113.20",
+        "rdns": "ae-2.border.example.net",
+        "rtt_ms": 13.0,
+        "asn": 54113,
         "prefix": "203.0.113.0/24"
       },
       {
-        "ttl": 4,
-        "ip": "104.16.132.229",
+        "ttl": 3,
+        "ip": "151.101.65.195",
         "rdns": null,
-        "rtt_ms": 15.0,
-        "asn": 13335,
-        "prefix": "104.16.0.0/12"
+        "rtt_ms": 11.9,
+        "asn": 54113,
+        "prefix": "151.101.0.0/16"
       }
     ],
     "asn_path": [
-      8708,
-      13335
+      54113
     ],
     "path_mtu": null
   }

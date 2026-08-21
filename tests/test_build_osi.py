@@ -171,8 +171,12 @@ def test_layer_five_does_not_claim_redirects_shared_one_connection():
     # sock = None before the next hop's fetch, and every request sends
     # Connection: close) -- the old wording, "N+1 request(s) over this
     # connection", asserted the opposite of what the collector actually does.
+    # Every leg's connection_reused is explicitly False (not just absent) --
+    # a genuinely measured "no reuse anywhere" chain, HTTP/1.1-style.
     trace = full_trace()
-    trace["http"]["hops"] = [{"status": 301}, {"status": 302}]
+    trace["http"]["hops"] = [{"status": 301, "connection_reused": False},
+                             {"status": 302, "connection_reused": False}]
+    trace["http"]["final"]["connection_reused"] = False
     osi = schema.build_osi(trace)
     joined = " ".join(osi["l5"]["facts"])
     assert "over this connection" in joined
@@ -227,10 +231,142 @@ def test_all_optional_sub_fields_none_never_prints_the_literal_none():
                          handshake_ms=None, chain=[], trust_root=None,
                          resumption=None)
     trace["http"]["final"].update(protocol=None, status=None, reason=None,
-                                   encoding=None, ratio=None, content_type=None)
+                                   encoding=None, ratio=None, content_type=None,
+                                   connection_reused=None)
+    trace["http"]["hops"] = [{"status": 301, "connection_reused": None}]
+    trace["negotiation"] = {"observed": True, "advertised": [], "offered": [],
+                            "unavailable": [], "chosen": None, "attempted": []}
     trace["path"].update(hops=[], asn_path=None, path_mtu=None)
 
     osi = schema.build_osi(trace)
     for layer, val in osi.items():
         for fact in val["facts"]:
             assert "None" not in fact, f"{layer}: leaked None in fact: {fact!r}"
+
+
+def test_l5_reports_real_reuse_under_h2():
+    # final.connection_reused is set explicitly here (True), not left absent,
+    # because build_osi now derives L5 from hops[] + final together -- an
+    # absent final leg reads as "not measured", not as "not reused" (see
+    # test_l5_does_not_claim_new_connections_when_reuse_is_unmeasured below).
+    trace = full_trace()
+    trace["negotiation"] = {"observed": True, "advertised": ["h2"],
+                            "offered": ["h2", "http/1.1"], "unavailable": [],
+                            "chosen": "h2", "attempted": []}
+    trace["http"]["hops"] = [{"url": "https://example.com/", "status": 301,
+                              "location": "https://www.example.com/",
+                              "protocol": "HTTP/2", "ttfb_ms": 1.0,
+                              "connection_reused": True, "stream_id": 3}]
+    trace["http"]["final"]["connection_reused"] = True
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l5"]["facts"])
+    assert "reused" in joined
+    assert "each on a new connection" not in joined
+
+
+def test_l5_still_says_new_connection_per_hop_under_http1():
+    trace = full_trace()
+    trace["negotiation"] = {"observed": True, "advertised": [], "offered": ["http/1.1"],
+                            "unavailable": [], "chosen": "http/1.1", "attempted": []}
+    trace["http"]["hops"] = [{"url": "http://example.com/", "status": 301,
+                              "location": "https://example.com/",
+                              "protocol": "HTTP/1.1", "ttfb_ms": 1.0,
+                              "connection_reused": False, "stream_id": None}]
+    trace["http"]["final"]["connection_reused"] = False
+    osi = schema.build_osi(trace)
+    assert "each on a new connection" in " ".join(osi["l5"]["facts"])
+
+
+def test_l5_reused_reflects_a_single_redirect_chain_shaped_by_collect():
+    # C7 fix: a one-redirect chain is the commonest shape a real trace takes,
+    # and it is exactly the shape the old hand-built tests above could not
+    # catch -- collect() puts the reused leg's connection_reused on `final`,
+    # never on hops[0] (hops[] only ever holds redirect responses, and the
+    # very first request in any chain is always reused=False). Driven
+    # through the real collector, not a hand-built http section, so this
+    # fails if build_osi ever goes back to reading hops[] alone.
+    from tests.test_collect_http import make_ctx
+    from wj.collect import http as http_collect
+
+    ctx = make_ctx()
+    ctx.results["tls"] = {"observed": True, "alpn": "h2", "_socket": object()}
+    ctx.results["negotiation"] = {"observed": True, "offered": ["h2"], "chosen": None,
+                                  "attempted": []}
+    pages = {
+        "https://example.com/": {
+            "protocol": "HTTP/2", "status": 301, "reason": None,
+            "headers": [("location", "https://example.com/next")], "body": b"",
+            "ttfb_ms": 1.0, "total_ms": 1.0, "wire_bytes": 0,
+            "stream_id": 1, "header_bytes": {"wire": 20, "decoded": 60},
+            "connection_reused": False},
+        "https://example.com/next": {
+            "protocol": "HTTP/2", "status": 200, "reason": None,
+            "headers": [("content-type", "text/html")], "body": b"ok",
+            "ttfb_ms": 2.0, "total_ms": 2.0, "wire_bytes": 2,
+            "stream_id": 3, "header_bytes": {"wire": 22, "decoded": 66},
+            "connection_reused": True},
+    }
+    section = http_collect.collect(ctx, fetch=lambda url, sock: pages[url])
+    assert section["hops"][0]["connection_reused"] is False   # the redirect itself opened it
+    assert section["final"]["connection_reused"] is True      # the reused leg, on `final`
+
+    trace = full_trace()
+    trace["negotiation"] = {"observed": True, "advertised": ["h2"], "offered": ["h2"],
+                            "unavailable": [], "chosen": "h2", "attempted": []}
+    trace["http"] = section
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l5"]["facts"])
+    assert "reused" in joined
+    assert "each on a new connection" not in joined
+
+
+def test_l5_does_not_claim_new_connections_when_reuse_is_unmeasured():
+    # An unmeasured leg (connection_reused absent -- the transport never
+    # reported it, a real and distinct trace state per
+    # test_connection_reused_is_absent_not_false_when_the_transport_does_not_
+    # report_it in tests/test_collect_http.py) must not be read as "opened a
+    # new connection". Even with a later leg genuinely measured as reused,
+    # the presence of any unmeasured leg means the whole claim is unproven.
+    trace = full_trace()
+    trace["http"]["hops"] = [{"status": 301, "connection_reused": False},
+                             {"status": 301, "connection_reused": None}]
+    trace["http"]["final"]["connection_reused"] = True
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l5"]["facts"])
+    assert "each on a new connection" not in joined
+    assert "reused" not in joined
+
+
+def test_l5_reused_wording_does_not_attribute_the_final_leg_to_a_redirect():
+    # Important, post-C7: on the canonical single-redirect h2 case, the
+    # request that reused the connection is `final`, not a redirect -- zero
+    # redirects reused anything. "N of M redirect(s) reused" would assert
+    # the opposite of what the trace measured. Also checks the two mixed
+    # shapes the reviewer probed: hops that are themselves all fresh, with
+    # only the final leg reused, and a chain where one hop AND the final
+    # leg both reused. In every shape the wording must stay generic ("...
+    # request(s) after the first...") rather than call any of them a
+    # redirect that reused something it did not.
+    cases = [
+        ([False], True, "1 of 1"),
+        ([False, False], True, "1 of 2"),
+        ([False, True], True, "2 of 2"),
+    ]
+    for hop_flags, final_flag, expected_count in cases:
+        trace = full_trace()
+        trace["http"]["hops"] = [{"status": 301, "connection_reused": f}
+                                 for f in hop_flags]
+        trace["http"]["final"]["connection_reused"] = final_flag
+        osi = schema.build_osi(trace)
+        joined = " ".join(osi["l5"]["facts"])
+        assert "redirect(s) reused" not in joined, (hop_flags, joined)
+        assert f"{expected_count} request(s) after the first reused" in joined, (hop_flags, joined)
+
+
+def test_l7_names_the_negotiated_protocol():
+    trace = full_trace()
+    trace["negotiation"] = {"observed": True, "advertised": ["h2"],
+                            "offered": ["h2", "http/1.1"], "unavailable": [],
+                            "chosen": "h2", "attempted": []}
+    osi = schema.build_osi(trace)
+    assert "h2" in " ".join(osi["l7"]["facts"])

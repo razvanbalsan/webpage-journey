@@ -1,7 +1,8 @@
 """Turn a completed trace into the short list of things worth acting on."""
 
 from wj.collect.tls import grade_expiry
-from wj.schema import add_note
+from wj.schema import add_note, join_present
+from wj.transport import TRANSPORTS
 
 POOR_GRADES = ("D", "E", "F")
 
@@ -14,6 +15,7 @@ def analyse(trace):
     trace["notes"] = []
     _analyse_dns(trace)
     _analyse_tls(trace)
+    _analyse_negotiation(trace)
     _analyse_http(trace)
 
 
@@ -56,17 +58,63 @@ def _analyse_tls(trace):
         add_note(trace, "warn", "tls",
                  "the presented issuer is not listed in the zone's CAA records")
 
-    dns = trace.get("dns", {})
-    advertised = [p for p in dns.get("alpn_advertised") or [] if p != "http/1.1"]
-    if advertised:
-        negotiated = tls.get("alpn")
-        if negotiated:
-            detail = f"and negotiated {negotiated}"
-        else:
-            detail = "and the server did not negotiate an ALPN protocol"
-        add_note(trace, "info", "tls",
-                 f"this host advertises {', '.join(advertised)}, "
-                 f"but this tool only offers HTTP/1.1 {detail}")
+
+def _analyse_negotiation(trace):
+    negotiation = trace.get("negotiation", {})
+    if not negotiation.get("observed"):
+        return
+
+    advertised = list(negotiation.get("advertised") or [])
+    offered = set(negotiation.get("offered") or [])
+    unavailable = set(negotiation.get("unavailable") or [])
+
+    # Nothing offered at all means ALPN never ran, so no gap was measured.
+    # negotiate.choose() returns offered: [] exactly once -- on a non-https
+    # run, where its own `signal` says "no TLS — ALPN does not apply" one
+    # field away in this same section. Without this guard every advertised
+    # protocol counted as a gap, and a --no-tls run of any Cloudflare- or
+    # Fastly-fronted host (alpn="h3,h2") published "this host advertises
+    # h3, h2, http/1.1, which this tool does not speak" -- false about this
+    # build's own capabilities, and contradicted by the signal beside it.
+    if not offered:
+        return
+
+    # A protocol the host advertises that we never put on the wire. Anything we
+    # offered is not a gap, whether or not the server picked it.
+    gaps = [p for p in advertised if p not in offered]
+    if not gaps:
+        return
+
+    missing_lib = [p for p in gaps if p in unavailable]
+    # "does not speak" is a claim about this build, so it may never name a
+    # protocol this build ships a transport module for, whatever the reason
+    # that protocol went unoffered on this particular run. TRANSPORTS is the
+    # one authority on what can be framed; anything in it that still ended up
+    # a gap is a fact about this run, not about the tool, and stays silent
+    # rather than being reported under the wrong sentence.
+    unsupported = [p for p in gaps
+                   if p not in unavailable and p not in TRANSPORTS]
+
+    # chosen is unmeasured (None) whenever the handshake never reported a
+    # negotiated protocol -- a plain http:// run, or TLS not observed. The
+    # "this trace used ..." clause is real information when we have it and
+    # must simply not appear when we don't; substituting a fallback here
+    # would publish a value nothing measured, so the clause is omitted
+    # rather than defaulted.
+    chosen = negotiation.get("chosen")
+    used = f"this trace used {chosen}" if chosen else None
+
+    if missing_lib:
+        add_note(trace, "info", "negotiation",
+                 join_present([
+                     f"this host advertises {', '.join(missing_lib)}, but the library "
+                     f"needed to speak it is not installed", used], sep=" — "))
+
+    if unsupported:
+        add_note(trace, "info", "negotiation",
+                 join_present([
+                     f"this host advertises {', '.join(unsupported)}, which this tool "
+                     f"does not speak", used], sep=" — "))
 
 
 def _analyse_http(trace):

@@ -7,7 +7,7 @@ or absent. A section that could not be collected says so, and says why.
 SCHEMA = "webpage-journey-trace/1"
 SCHEMA_MAJOR = 1
 
-SECTIONS = ("local", "dns", "tcp", "tls", "http", "path")
+SECTIONS = ("local", "dns", "negotiation", "tcp", "tls", "http", "path")
 SEVERITIES = ("info", "warn", "critical")
 
 
@@ -157,22 +157,44 @@ def build_osi(trace):
         if tcp.get("winner_family"):
             l4_facts.append(f"{tcp['winner_family']} won the connection race")
 
+    final = http.get("final") or {}
     l5_facts = []
     if tls.get("observed"):
         l5_facts.append("TLS session established")
         if (tls.get("resumption") or {}).get("resumed"):
             l5_facts.append("resumed from a session ticket")
     if http.get("observed"):
-        # Every redirect hop opens a fresh connection (wj/collect/http.py sets
-        # sock = None before the next hop's fetch, and every request sends
-        # Connection: close) -- N+1 requests went over N+1 DIFFERENT
-        # connections, never one shared connection carrying all of them.
         hops = http.get("hops") or []
-        l5_facts.append("1 request over this connection")
+        # Every request after the first (hops[1], hops[2], ..., and final)
+        # either reused the connection of the request immediately before it
+        # or opened its own -- exactly len(hops) such transitions: hops[1:]
+        # supplies len(hops) - 1 of them, final supplies the last. hops[0]
+        # itself is excluded: it is definitionally the first request over
+        # this trace's connection, so its own connection_reused value
+        # describes nothing about what came before it. A transition of None
+        # means the transport never reported reuse for that leg -- collapsing
+        # that into False would publish an unmeasured "opened a new
+        # connection" as if it were a measurement.
+        transitions = [h.get("connection_reused") for h in hops[1:]]
         if hops:
-            l5_facts.append(f"{len(hops)} redirect(s), each on a new connection")
+            transitions.append(final.get("connection_reused"))
+        if any(t is None for t in transitions):
+            l5_facts.append("connection reuse not measured for part of this chain")
+        elif any(transitions):
+            reused_count = sum(1 for t in transitions if t)
+            # Not "redirect(s)": the reused leg is often the final, non-
+            # redirect response (the canonical single-redirect h2 case has
+            # 0 redirects reusing anything -- the final response is what
+            # reused hops[0]'s connection). "requests after the first" is
+            # exactly true for every shape, redirect or not.
+            l5_facts.append(
+                f"{reused_count} of {len(transitions)} request(s) after the "
+                f"first reused the connection")
+        else:
+            l5_facts.append("1 request over this connection")
+            if hops:
+                l5_facts.append(f"{len(hops)} redirect(s), each on a new connection")
 
-    final = http.get("final") or {}
     l6_facts = []
     if tls.get("observed"):
         version_cipher = " · ".join(
@@ -197,7 +219,10 @@ def build_osi(trace):
     if final.get("content_type"):
         l6_facts.append(final["content_type"])
 
+    negotiation = trace.get("negotiation", {})
     l7_facts = []
+    if negotiation.get("observed") and negotiation.get("chosen"):
+        l7_facts.append(f"negotiated {negotiation['chosen']} over ALPN")
     if http.get("observed"):
         protocol, status = final.get("protocol"), final.get("status")
         if protocol and status is not None:

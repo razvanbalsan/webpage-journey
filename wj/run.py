@@ -8,6 +8,7 @@ from wj import findings, schema
 from wj.collect import dns as dns_collect
 from wj.collect import http as http_collect
 from wj.collect import local as local_collect
+from wj.collect import negotiate as negotiate_collect
 from wj.collect import path as path_collect
 from wj.collect import tcp as tcp_collect
 from wj.collect import tls as tls_collect
@@ -19,13 +20,22 @@ EXIT_USAGE = 2
 COLLECTORS = {
     "local": local_collect.collect,
     "dns": dns_collect.collect,
+    "negotiation": negotiate_collect.collect,
     "tcp": tcp_collect.collect,
     "tls": tls_collect.collect,
     "http": http_collect.collect,
     "path": path_collect.collect,
 }
 
-# section -> the section it needs to have observed before it can run
+# section -> the section it needs to have observed before it can run.
+#
+# "negotiation" is deliberately NOT listed. wj/collect/negotiate.py's collect()
+# carries its own dns guard, and gating it here too left two divergent messages
+# for one condition, the collector's -- which quotes dns's own why_not, so the
+# reader learns WHY it did not resolve -- permanently unreachable. The collector
+# is pure (no I/O, no socket), so there is nothing this gate was protecting it
+# from; every other entry here guards a collector that would otherwise reach for
+# a socket that does not exist.
 DEPENDS_ON = {"tcp": "dns", "tls": "tcp", "http": "tcp", "path": "tcp"}
 
 
@@ -114,6 +124,8 @@ def orchestrate(ctx, collectors=None, now=time.monotonic):
         local_future = pool.submit(_run_one, "local", collectors["local"], ctx, now)
         ctx.results["dns"] = _run_one("dns", collectors["dns"], ctx, now)
         ctx.results["local"] = local_future.result()
+
+    ctx.results["negotiation"] = _run_one("negotiation", collectors["negotiation"], ctx, now)
 
     ctx.results["tcp"] = _run_one("tcp", collectors["tcp"], ctx, now)
 

@@ -1,15 +1,14 @@
 """Layer 7: the request, every redirect it took, and what the response tells you."""
 
 import gzip
-import time
 import zlib
 from urllib.parse import urljoin, urlsplit
 
-from wj.collect.tls import ALPN_PROTOCOLS
 from wj.schema import observed, unobserved
+from wj.transport import TRANSPORTS, h1
+from wj.transport.h2 import TransportUnavailable
 
 MAX_REDIRECTS = 10
-DEFAULT_PORTS = {"http": 80, "https": 443}
 
 SECURITY_HEADERS = (
     "Strict-Transport-Security",
@@ -32,39 +31,6 @@ CDN_SIGNATURES = (
 
 CACHE_HEADERS = ("cf-cache-status", "x-cache", "x-drupal-cache", "x-vercel-cache")
 
-# The fixed headers this tool sends on every hop. Kept as data (not baked into
-# an f-string) so the exact set that went out can be recorded on the trace and
-# shown back to the user, rather than reconstructed by eye from the source.
-REQUEST_HEADERS = (
-    ("User-Agent", "webpage-journey/2.0"),
-    ("Accept-Encoding", "gzip, deflate"),
-    ("Accept", "*/*"),
-    ("Connection", "close"),
-)
-
-
-def build_request(url):
-    """The request line and headers this tool sends for one hop.
-
-    Returned as structured data so collect() can record exactly what was sent
-    on the final hop and the renderer can print it verbatim. Host comes first,
-    as it does on the wire.
-    """
-    split = urlsplit(url)
-    target = split.path or "/"
-    if split.query:
-        target += "?" + split.query
-    headers = [("Host", split.hostname or "")] + list(REQUEST_HEADERS)
-    return {"method": "GET", "target": target,
-            "http_version": "HTTP/1.1", "headers": headers}
-
-
-def request_bytes(request):
-    """Serialise a build_request() dict to the raw bytes put on the socket."""
-    lines = [f"{request['method']} {request['target']} {request['http_version']}"]
-    lines += [f"{key}: {value}" for key, value in request["headers"]]
-    return ("\r\n".join(lines) + "\r\n\r\n").encode()
-
 
 def header_value(headers, name):
     target = name.lower()
@@ -74,49 +40,23 @@ def header_value(headers, name):
     return None
 
 
-def parse_response(raw):
-    blob, _, body = raw.partition(b"\r\n\r\n")
-    lines = blob.decode("latin-1", errors="replace").split("\r\n")
-    protocol = status = reason = None
-    if lines and lines[0]:
-        parts = lines[0].split(" ", 2)
-        protocol = parts[0] if parts else None
-        if len(parts) > 1:
-            try:
-                status = int(parts[1])
-            except ValueError:
-                status = None
-        reason = parts[2] if len(parts) > 2 else None
-
-    headers = []
-    for line in lines[1:]:
-        if ":" in line:
-            key, _, value = line.partition(":")
-            headers.append((key.strip(), value.strip()))
-
-    return {"protocol": protocol, "status": status, "reason": reason,
-            "headers": headers, "body": body}
-
-
-def dechunk(body):
-    out = bytearray()
-    rest = body
-    while rest:
-        size_line, _, rest = rest.partition(b"\r\n")
-        try:
-            size = int(size_line.split(b";")[0].strip(), 16)
-        except ValueError:
-            break
-        if size == 0:
-            break
-        out += rest[:size]
-        rest = rest[size:].lstrip(b"\r\n")
-    return bytes(out)
-
-
 def decode_body(headers, body):
+    """Undo Content-Encoding (compression). Transfer-Encoding (framing) is the
+    transport's concern: h1.parse_response() has already dechunked the body and
+    dropped the header by the time it reaches here, and HTTP/2 has no such
+    header at all.
+    """
+    # If Transfer-Encoding: chunked is still present, the caller skipped the
+    # transport's dechunking step -- decoding these bytes as the body would
+    # silently produce a plausible-looking but wrong value (still-chunked
+    # framing decompressed or passed through as if it were content), with no
+    # absence marker to show it happened. That is a programming error in the
+    # caller, not a measurement to report, so this fails loudly instead of
+    # guessing.
     if (header_value(headers, "transfer-encoding") or "").lower() == "chunked":
-        body = dechunk(body)
+        raise ValueError(
+            "decode_body received a still-chunked body -- the caller must "
+            "dechunk (see wj.transport.h1.parse_response) before calling this")
 
     # A decompression failure returns None for the decoded body, not the raw
     # (still-compressed) bytes under the same encoding label -- returning the
@@ -213,62 +153,16 @@ def detect_cdn(headers):
     return None
 
 
-def _open(split, ctx):
-    """Open a connection for a redirect hop, matching the URL's own scheme."""
-    import socket
-    import ssl
+def transport_for(ctx):
+    """The transport for the protocol ALPN actually selected.
 
-    port = split.port or DEFAULT_PORTS.get(split.scheme, 443)
-    sock = socket.create_connection((split.hostname, port), timeout=ctx.budget_for(ctx.timeout))
-    if split.scheme == "https":
-        context = ssl.create_default_context()
-        context.set_alpn_protocols(ALPN_PROTOCOLS)
-        sock = context.wrap_socket(sock, server_hostname=split.hostname)
-    return sock
-
-
-def _socket_fetch(ctx):
-    def fetch(url, sock):
-        split = urlsplit(url)
-        opened_here = sock is None
-        if opened_here:
-            # Each redirect hop needs a fresh connection: the first one was opened by
-            # the TCP/TLS collectors and closes after this response (Connection: close).
-            sock = _open(split, ctx)
-        try:
-            request = build_request(url)
-
-            sock.settimeout(ctx.budget_for(ctx.timeout))
-            started = time.perf_counter()
-            sock.sendall(request_bytes(request))
-
-            chunks = []
-            ttfb = None
-            while True:
-                try:
-                    data = sock.recv(65536)
-                except OSError:
-                    break
-                if not data:
-                    break
-                if ttfb is None:
-                    ttfb = round((time.perf_counter() - started) * 1000, 1)
-                chunks.append(data)
-
-            raw = b"".join(chunks)
-            parsed = parse_response(raw)
-            parsed["request"] = request
-            parsed["ttfb_ms"] = ttfb
-            parsed["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
-            parsed["wire_bytes"] = len(parsed["body"])
-            return parsed
-        finally:
-            # Only close what this call opened. The first hop's socket belongs to
-            # the TLS/TCP collector and is closed later by the orchestrator.
-            if opened_here:
-                sock.close()
-
-    return fetch
+    The server chooses during the handshake; we follow. A server that does no
+    ALPN leaves this None, and HTTP/1.1 is the correct reading of that rather
+    than a guess.
+    """
+    alpn = (ctx.results.get("tls", {}) or {}).get("alpn")
+    protocol = alpn if alpn in TRANSPORTS else "http/1.1"
+    return TRANSPORTS[protocol], protocol
 
 
 def collect(ctx, fetch=None):
@@ -287,7 +181,63 @@ def collect(ctx, fetch=None):
     if sock is None:
         return unobserved("no connection to send a request over")
 
-    fetch = fetch or _socket_fetch(ctx)
+    alpn = tls.get("alpn")
+
+    negotiation = ctx.results.get("negotiation")
+    if alpn and isinstance(negotiation, dict) and negotiation.get("observed"):
+        # `alpn`, not the transport's `protocol`: protocol is transport_for()'s
+        # fallback for when ALPN reported nothing, and a fallback is not a
+        # negotiated choice -- they coincide only when the server explicitly
+        # selected http/1.1 over ALPN.
+        #
+        # Recorded FIRST, before either the no-transport-module guard below or
+        # the fetcher is even built: the handshake already measured this, and
+        # every way a later step can fail is a separate fact. Sitting below the
+        # guard, a measurably-negotiated h3 was thrown away and the page then
+        # printed "Negotiated: nothing (ALPN selected no protocol)" wearing a
+        # measured badge, three rows under an "ALPN: h3" that was also measured
+        # -- a false negative, not merely a missing value. Discarding a
+        # measurement because a later step failed is the mirror image of
+        # fabricating one.
+        negotiation["chosen"] = alpn
+
+    if alpn is not None and alpn not in TRANSPORTS:
+        # A protocol the server actually selected but this build has no
+        # transport module for at all (h3, deferred to Phase 2) -- distinct
+        # from TransportUnavailable below, where the module exists but this
+        # build can't use it (e.g. a missing library). transport_for()'s own
+        # fallback to HTTP/1.1 exists for "ALPN selected nothing"; silently
+        # reusing it here would write the wrong protocol's bytes over a
+        # connection the server agreed to speak something else over, and
+        # would report a chosen protocol nobody chose.
+        return unobserved(f"negotiated {alpn} but this build has no transport for it")
+
+    module, protocol = transport_for(ctx)
+
+    if fetch is None:
+        try:
+            fetch = module.fetcher(ctx)
+        except TransportUnavailable as exc:
+            # ALPN selected a protocol this build cannot frame. That is an error,
+            # not a fallback: the server agreed to speak it. Retrying on HTTP/1.1
+            # and reporting success would hide a real defect.
+            return unobserved(f"negotiated {protocol} but cannot speak it: {exc}")
+        # HTTP/2 over cleartext needs "prior knowledge" this tool has no way
+        # to acquire -- ALPN cannot run without TLS, so nothing ever confirms
+        # a plain http:// hop actually speaks h2. transport_for() is decided
+        # once, from the origin's own handshake, and stays fixed for the
+        # whole redirect chain; without this, a redirect to a plain http://
+        # target would still be handed to the h2 transport, which (verified
+        # against a realistic HTTP/1.1-only port-80 server) just burns the
+        # timeout budget and reports a misleading "no response received"
+        # instead of an answer. Keep h1's fetcher on hand to use for any hop
+        # whose own URL is not https, regardless of what the origin
+        # negotiated -- each hop's own response.get("protocol") (already
+        # recorded per hop below) then honestly reports which transport
+        # actually served it, so no new field is needed to carry the switch.
+        cleartext_fetch = h1.fetcher(ctx) if protocol != "http/1.1" else fetch
+    else:
+        cleartext_fetch = fetch
 
     url = f"{ctx.scheme}://{ctx.host}{ctx.path}"
     hops = []
@@ -296,8 +246,9 @@ def collect(ctx, fetch=None):
     limit_reached = True  # cleared by the break below once a non-redirect response lands
 
     for _ in range(MAX_REDIRECTS):
+        active_fetch = fetch if urlsplit(url).scheme == "https" else cleartext_fetch
         try:
-            response = fetch(url, sock)
+            response = active_fetch(url, sock)
         except OSError as exc:
             section = unobserved(f"request failed: {exc}")
             section["hops"] = hops
@@ -313,12 +264,23 @@ def collect(ctx, fetch=None):
             return section
 
         if 300 <= status < 400 and location:
+            next_url = urljoin(url, location)
+            target = urlsplit(next_url)
+            same_origin = (target.scheme == ctx.scheme and target.hostname == ctx.host
+                          and (target.port or h1.DEFAULT_PORTS.get(target.scheme, 443)) == ctx.port)
             hops.append({"url": url, "status": status,
-                         "location": urljoin(url, location),
+                         "location": next_url,
                          "protocol": response.get("protocol"),
-                         "ttfb_ms": response.get("ttfb_ms")})
-            url = urljoin(url, location)
-            sock = None  # fetch opens a fresh connection for the next hop
+                         "ttfb_ms": response.get("ttfb_ms"),
+                         "connection_reused": response.get("connection_reused"),
+                         "stream_id": response.get("stream_id")})
+            url = next_url
+            if protocol == "http/1.1" or not same_origin:
+                # A redirect that leaves the origin must not go out over the
+                # origin's own connection -- that socket is a TLS session
+                # established with, and authenticated to, a DIFFERENT host.
+                # fetch() opens a fresh, guarded connection for the next hop.
+                sock = None
             continue
         limit_reached = False
         break
@@ -335,10 +297,23 @@ def collect(ctx, fetch=None):
         redirect_limit_reached=limit_reached,
         final={"url": fetched_url, "status": response["status"], "reason": response.get("reason"),
                "protocol": response.get("protocol"), "headers": response["headers"],
-               "request": response.get("request") or build_request(fetched_url),
+               # Both transports always set "request" from what they actually
+               # put on the wire (h1.fetcher via build_request, h2.fetcher via
+               # its own pseudo-header list). There is deliberately no fallback
+               # here: the only thing a fallback could publish is an HTTP/1.1
+               # request that was never sent, which is precisely the fabricated
+               # value this project's one rule forbids.
+               "request": response.get("request"),
                "ttfb_ms": response.get("ttfb_ms"), "total_ms": response.get("total_ms"),
                "wire_bytes": wire, "decoded_bytes": decoded_bytes,
-               "encoding": encoding, "ratio": ratio, "content_type": content_type},
+               "encoding": encoding, "ratio": ratio, "content_type": content_type,
+               "header_bytes": response.get("header_bytes"),
+               # Measured by the h2 transport on every response and already
+               # carried on each redirect hop above; absent on HTTP/1.1, which
+               # has no streams to number. Without it here a redirect-free h2
+               # trace recorded no stream id anywhere in the document at all.
+               "stream_id": response.get("stream_id"),
+               "connection_reused": response.get("connection_reused")},
         cache=cache_state(response["headers"]),
         cdn=detect_cdn(response["headers"]),
         security=grade_security(response["headers"], ctx.scheme),

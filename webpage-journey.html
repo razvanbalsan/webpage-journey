@@ -1152,7 +1152,8 @@
         if (httpsRecords && httpsRecords.length) {
           var alpn = s.alpn_advertised || [];
           rows.push(["ALPN advertised (HTTPS record — what the host says it " +
-            "supports, deliberately not what this tool negotiated)", fact(
+            "supports; see Negotiated on the TLS Handshake step for what this " +
+            "tool actually got)", fact(
             alpn.length ? alpn.join(", ") : "(record present, no ALPN param)", "measured")]);
           rows.push(["ECH (Encrypted Client Hello) advertised", fact(
             s.ech === true ? "yes" : s.ech === false ? "no" : "unknown", "measured")]);
@@ -1313,6 +1314,20 @@
                        s.caa_match === false ? "issuer NOT listed" : "no comparable record",
                        "measured")]
         ];
+        var neg = traceSection("negotiation");
+        if (neg) {
+          rows.push(["Host advertises",
+                     fact((neg.advertised || []).join(", ") || "nothing", "measured")]);
+          rows.push(["We offered",
+                     fact((neg.offered || []).join(", ") || "nothing (no TLS)", "measured")]);
+          rows.push(["Negotiated",
+                     fact(neg.chosen || "nothing (ALPN selected no protocol)", "measured")]);
+          if ((neg.unavailable || []).length) {
+            rows.push(["Not offered",
+                       fact(neg.unavailable.join(", ") + " — library not installed",
+                            "measured")]);
+          }
+        }
         (s.chain || []).forEach(function (c, i) {
           // A chain entry can carry neither a Common Name nor an Organization
           // Name (wj/collect/tls.py's common_name() returns None for both) —
@@ -1369,8 +1384,31 @@
       bind: function () {
         var s = traceSection("http");
         if (!s) return [];
-        return [["Negotiated protocol", fact((s.final || {}).protocol, "measured")],
-                ["Requested URL", fact((s.final || {}).url, "measured")]];
+        var f = s.final || {};
+        // "Protocol used", not "Negotiated protocol": final.protocol is the
+        // protocol the FINAL response was served over, which is not what ALPN
+        // selected. The TLS Handshake step above now carries the real
+        // "Negotiated" row (negotiation.chosen). Two rows both called
+        // Negotiated, both badged measured, flatly contradicted each other on
+        // any chain whose origin negotiated h2 and then redirected to an
+        // http:// URL, where this tool falls back to the HTTP/1.1 transport
+        // for the cleartext hop.
+        var rows = [["Protocol used", fact(f.protocol, "measured")],
+                    ["Requested URL", fact(f.url, "measured")]];
+        // HTTP/2 only -- HTTP/1.1 has no streams to number, so an absent
+        // stream_id on an h1 trace is the correct reading, not a gap.
+        //
+        // The id is the measurement; "HTTP/2 carries each request on its own
+        // stream" is a protocol fact true of every h2 request. It does NOT say
+        // this connection was shared: on the redirect-free h2 trace this row
+        // exists for, exactly one stream was measured and nothing was observed
+        // sharing anything. The Connection row on the Response step and the
+        // per-hop rows on the Redirects step are what report sharing.
+        if (f.stream_id != null) {
+          rows.push(["Stream", fact(f.stream_id +
+            " — HTTP/2 carries each request on its own stream", "measured")]);
+        }
+        return rows;
       },
       testYourself: function () {
         return "curl -sSv --http2 https://" + host() + "/ -o /dev/null 2>&1 | grep -i 'ALPN\\|HTTP/'";
@@ -1393,8 +1431,15 @@
         var s = traceSection("http");
         if (!s) return [];
         var rows = (s.hops || []).map(function (h, i) {
-          return ["Hop " + (i + 1) + " · " + h.status,
-                  fact(joined([h.url, h.location], " → "), "measured")];
+          var detail = joined([h.url, h.location], " → ");
+          // Three states, three distinct readings -- true and null must not
+          // collapse to the same silent "no note" a reader would misread as
+          // false. false stays silent (a measured negative earns no badge
+          // elsewhere in this file either); null says plainly it wasn't reported.
+          var reuseNote = h.connection_reused === true ? "(reused the same connection)" :
+                          h.connection_reused == null ? "(connection reuse not reported)" : null;
+          if (reuseNote) { detail = joined([detail, reuseNote], "  "); }
+          return ["Hop " + (i + 1) + " · " + h.status, fact(detail, "measured")];
         });
         if (s.redirect_limit_reached && (s.hops || []).length) {
           // A hop count alone reads as the whole chain — say plainly it was cut short.
@@ -1479,9 +1524,15 @@
         var s = traceSection("http");
         if (!s) return [];
         var f = s.final || {}, sec = s.security || {};
-        return [
+        var rows = [
           ["Status", fact([f.protocol, f.status != null ? String(f.status) : null]
             .filter(function (p) { return p; }).join(" ") || null, "measured")],
+          // Three states, three distinct readings -- see the same guard on the
+          // redirects hops above. An absent key (older-schema trace) reads the
+          // same as an explicit null: both are "not reported", not "no".
+          ["Connection", fact(f.connection_reused === true ? "reused the earlier connection" :
+                              f.connection_reused === false ? "opened fresh" :
+                              "not reported", "measured")],
           ["Content type", fact(f.content_type, "measured")],
           ["On the wire", fact(f.wire_bytes != null ? f.wire_bytes + " bytes" : null, "measured")],
           ["Decoded", fact(f.decoded_bytes != null ? f.decoded_bytes + " bytes" : null, "measured")],
@@ -1494,6 +1545,16 @@
                    (c.samesite ? " SameSite=" + c.samesite : " -SameSite");
           }).join("; ") || "none", "measured")]
         ];
+        // Guard each member, not just the containing object: a half-measured
+        // {"wire": null, "decoded": N} would otherwise concatenate into the
+        // literal text "null bytes on the wire" and still carry a "measured"
+        // badge asserting the whole value is trustworthy.
+        if (f.header_bytes && f.header_bytes.wire != null && f.header_bytes.decoded != null) {
+          rows.push(["Header compression",
+                     fact(f.header_bytes.wire + " bytes on the wire → " +
+                          f.header_bytes.decoded + " decoded", "measured")]);
+        }
+        return rows;
       },
       testYourself: function () {
         return "curl -sSI https://" + host() + "/\n" +
