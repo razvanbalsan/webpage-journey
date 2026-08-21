@@ -3,12 +3,15 @@ from pathlib import Path
 
 import pytest
 
-from wj import schema
+from tests.fixtures import make_golden
+from wj import capabilities, redact, schema
+from wj.collect import negotiate
 from wj.collect.http import decode_body
 from wj.collect.tls import caa_allows
+from wj.run import orchestrate
 
 GOLDEN = Path(__file__).parent / "fixtures" / "golden"
-NAMES = ["cdn-host.json", "plain-host.json", "partial-unprivileged.json"]
+NAMES = ["cdn-host.json", "plain-host.json", "partial-unprivileged.json", "h2-host.json"]
 
 # The five identifiers a redacted export must never carry -- local_mac,
 # gateway_mac, local_ip, gateway_ip, public_ip, in that order in the fixture.
@@ -101,3 +104,55 @@ def test_fixture_decoded_body_agrees_with_the_real_function(name):
     # fixture's own final.headers, which is the part decode_body derives.
     _decoded, encoding = decode_body(final["headers"], b"")
     assert encoding == final["encoding"]
+
+
+def _fresh_trace(name):
+    """Build the trace tests/fixtures/make_golden.py would write for `name`,
+    without touching disk. make_golden.specs() is the single recipe both
+    __main__ there and this test build from, so they cannot drift apart."""
+    ctx, collectors_map = make_golden.specs()[name]
+    trace = orchestrate(ctx, collectors=collectors_map)
+    trace["generated_at"] = make_golden.GENERATED_AT
+    return trace
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_golden_fixture_matches_a_fresh_generator_run(name):
+    # I3: this suite only ever validated PROPERTIES of the committed
+    # fixtures, never that a fixture still matches what the generator
+    # actually produces today -- precisely how a stale, self-contradictory
+    # fixture (negotiation.chosen: null sitting next to tls.alpn: "http/1.1")
+    # survived undetected earlier in this plan. A golden that drifts from
+    # its own generator must fail here, not get discovered by a human
+    # reading the rendered page.
+    committed = json.loads((GOLDEN / name).read_text())
+    assert _fresh_trace(name) == committed
+
+
+def test_redacted_golden_fixture_matches_a_fresh_generator_run():
+    committed = json.loads((GOLDEN / "cdn-host-redacted.json").read_text())
+    fresh = redact.redact_trace(_fresh_trace("cdn-host.json"))
+    assert fresh == committed
+
+
+def test_h2_fixture_negotiation_agrees_with_the_real_chooser():
+    # The fixture-fidelity pattern above, applied to negotiate.choose():
+    # h2-host.json's negotiation.offered must be what the real chooser
+    # returns for the fixture's own recorded advertised/scheme, not a
+    # hand-derived value that can drift from wj/collect/negotiate.py.
+    trace = json.loads((GOLDEN / "h2-host.json").read_text())
+    caps = capabilities.Capabilities(libs={"h2": True}, tools={},
+                                     privileged=False, can_sudo=False)
+    decision = negotiate.choose(trace["negotiation"]["advertised"], caps,
+                                trace["target"]["scheme"])
+    assert decision["offered"] == trace["negotiation"]["offered"]
+
+
+def test_h2_fixture_has_a_hop_that_reused_the_connection():
+    # I2: no golden fixture ever carried connection_reused: true anywhere in
+    # hops[] -- HTTP/1.1 always opens a fresh connection per hop (see
+    # wj/transport/h1.py), so only a same-origin HTTP/2 redirect chain can
+    # exercise this at all.
+    trace = json.loads((GOLDEN / "h2-host.json").read_text())
+    reused_hops = [h for h in trace["http"]["hops"] if h["connection_reused"] is True]
+    assert reused_hops, "expected at least one hop with connection_reused: true"

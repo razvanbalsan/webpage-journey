@@ -2,12 +2,16 @@
 
 import copy
 import ipaddress
+import re
 
 from wj import schema
 
 REDACTED = "[redacted at export]"
 
 LOCAL_FIELDS = ("local_ip", "local_mac", "gateway_ip", "gateway_mac", "public_ip")
+
+_MAC_RE = re.compile(r"\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b")
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
 
 def _identifies_operator(value):
@@ -24,6 +28,26 @@ def _identifies_operator(value):
         return not ipaddress.ip_address(value).is_global
     except ValueError:
         return True
+
+
+def _scrub_embedded_identifiers(text):
+    """Replace any MAC address or non-global IPv4 address embedded in a
+    string with REDACTED, leaving the rest of the text intact.
+
+    Used on negotiation.signal below. wj/collect/negotiate.py's choose()
+    only ever produces a handful of fixed strings, none of which embed an
+    identifier -- this is a defensive backstop for a future signal string
+    that does, not a fix for a value seen today.
+    """
+    text = _MAC_RE.sub(REDACTED, text)
+
+    def _sub(match):
+        try:
+            return match.group() if ipaddress.ip_address(match.group()).is_global else REDACTED
+        except ValueError:
+            return match.group()
+
+    return _IPV4_RE.sub(_sub, text)
 
 
 def redact_trace(trace):
@@ -61,6 +85,10 @@ def redact_trace(trace):
                 REDACTED if _identifies_operator(s) else s
                 for s in resolver["servers"]
             ]
+
+    negotiation = out.get("negotiation", {})
+    if negotiation.get("observed") and negotiation.get("signal"):
+        negotiation["signal"] = _scrub_embedded_identifiers(negotiation["signal"])
 
     # The OSI narrative is assembled from the same local/tcp/dns/path facts
     # above, but as free-text strings baked in at orchestration time — before

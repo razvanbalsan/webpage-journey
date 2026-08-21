@@ -79,7 +79,7 @@ def test_help_documents_redaction_default():
     assert "--no-redact" in help_text
 
 
-def test_help_documents_the_http1_1_limitation():
+def test_help_documents_protocol_negotiation():
     help_text = build_parser().format_help()
     assert "HTTP/1.1" in help_text
     assert "ALPN" in help_text

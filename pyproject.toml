@@ -11,7 +11,7 @@ dependencies = [
     "rich",
     "dnspython",
     "cryptography>=42.0",
-    "h2",
+    "h2>=4",
 ]
 
 [project.scripts]

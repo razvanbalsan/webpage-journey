@@ -127,6 +127,7 @@
     "l7": {
       "observed": true,
       "facts": [
+        "negotiated http/1.1 over ALPN",
         "HTTP/1.1 \u2192 200",
         "1 redirect(s) followed",
         "DNS: example.com \u2192 104.16.132.229",
@@ -145,7 +146,7 @@
     {
       "severity": "info",
       "section": "negotiation",
-      "text": "this host advertises h3, which this tool does not speak"
+      "text": "this host advertises h3, which this tool does not speak \u2014 this trace used http/1.1"
     },
     {
       "severity": "warn",
@@ -271,7 +272,7 @@
     ],
     "signal": "HTTPS record",
     "unavailable": [],
-    "chosen": null,
+    "chosen": "http/1.1",
     "attempted": []
   },
   "tcp": {

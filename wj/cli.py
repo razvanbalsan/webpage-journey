@@ -56,12 +56,14 @@ Redaction:
   Use --no-redact to keep that detail.
 
 Protocol support:
-  %(prog)s speaks only HTTP/1.1. It offers just that one protocol over
-  ALPN during the TLS handshake, because it has no HTTP/2 framing to fall
-  back on -- offering h2 without being able to speak it would mean lying
-  about what happened on the wire. What a host supports is a separate,
-  honestly-labelled measurement, reported as a finding (e.g. "this host
-  advertises h2, h3, but this tool only offers HTTP/1.1").
+  %(prog)s offers h2 over ALPN during the TLS handshake whenever the
+  host's DNS HTTPS record advertises it, and falls back to HTTP/1.1 when
+  it does not, or when h2 was advertised but this build cannot offer it
+  (e.g. the h2 library is missing). What the server actually negotiates
+  is a separate, honestly-labelled measurement -- every trace reports
+  which protocol was used. It does not yet speak HTTP/3; a host that
+  advertises h3 is reported as a finding (e.g. "this host advertises h3,
+  which this tool does not speak").
 
 Trace only hosts you are authorised to probe.
 """

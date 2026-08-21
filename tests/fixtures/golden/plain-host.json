@@ -127,6 +127,7 @@
     "l7": {
       "observed": true,
       "facts": [
+        "negotiated http/1.1 over ALPN",
         "HTTP/1.1 \u2192 200",
         "1 redirect(s) followed",
         "DNS: plain.example.net \u2192 104.16.132.229",
@@ -274,7 +275,7 @@
     ],
     "signal": "no HTTPS record",
     "unavailable": [],
-    "chosen": null,
+    "chosen": "http/1.1",
     "attempted": []
   },
   "tcp": {

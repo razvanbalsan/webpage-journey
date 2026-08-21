@@ -211,6 +211,19 @@ def test_redacts_a_private_dns_resolver_but_keeps_a_public_one():
     assert out["dns"]["resolver"]["servers"][1] == "1.1.1.1"
 
 
+def test_the_structural_walker_reaches_the_negotiation_section():
+    # negotiation.signal is currently always one of a handful of fixed
+    # strings from wj/collect/negotiate.py that never embed an identifier --
+    # but adding a section is exactly when a fixture-blind leak has
+    # previously gone unnoticed on this project, so this proves redact_trace
+    # actually reaches into negotiation rather than skipping it entirely.
+    trace = sample_trace()
+    trace["negotiation"]["signal"] = "HTTPS record via 192.168.1.1"
+    out = redact.redact_trace(trace)
+    leaked = [s for s in _iter_strings(out) if "192.168.1.1" in s]
+    assert not leaked, leaked
+
+
 LEAKED_IDENTIFIERS = ("aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66",
                       "192.168.1.23", "192.168.1.1", "81.180.20.7")
 
