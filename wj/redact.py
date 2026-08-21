@@ -10,6 +10,20 @@ REDACTED = "[redacted at export]"
 
 LOCAL_FIELDS = ("local_ip", "local_mac", "gateway_ip", "gateway_mac", "public_ip")
 
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# Covers full 8-group form, "::"-compressed forms at any position, and bare
+# "::1". The two variable-length alternations end on a negative lookahead
+# for a further hex/colon character, not \b: a re-review found \b false
+# NEGATIVE at the very end of an address like "2001:db8::" followed by
+# whitespace -- both the trailing ":" and the whitespace are non-word
+# characters, so \b never fires there and only "db8::" got matched,
+# leaving "2001:" unredacted.
+_IPV6_RE = re.compile(
+    r"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b"
+    r"|\b(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,5})?(?![0-9a-fA-F:])"
+    r"|\B::(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}\b"
+    r"|\b[0-9a-fA-F]{1,4}::(?![0-9a-fA-F:])"
+)
 # Colon (aa:bb:cc:dd:ee:ff), hyphen (aa-bb-cc-dd-ee-ff), and Cisco dot-quad
 # (aaaa.bbbb.cccc) forms. _scrub_embedded_identifiers()'s docstring promises
 # "any MAC address" -- colon is the only form any collector in this
@@ -22,25 +36,6 @@ _MAC_RE = re.compile(
     r"\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b"
     r"|\b[0-9a-fA-F]{2}(?:-[0-9a-fA-F]{2}){5}\b"
     r"|\b[0-9a-fA-F]{4}(?:\.[0-9a-fA-F]{4}){2}\b"
-)
-_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-# Covers full 8-group form, "::"-compressed forms at any position, and bare
-# "::1". The two variable-length alternations end on a negative lookahead
-# for a further hex/colon character, not \b: a re-review found \b false
-# NEGATIVE at the very end of an address like "2001:db8::" followed by
-# whitespace -- both the trailing ":" and the whitespace are non-word
-# characters, so \b never fires there and only "db8::" got matched,
-# leaving "2001:" unredacted. _scrub_embedded_identifiers() below also
-# runs this AFTER _IPV4_RE, not before: an IPv4-mapped address like
-# "::ffff:192.168.1.1" let this pattern's own "::ffff:192" alternative
-# consume the leading "192" as a bare hex group when run first, which
-# broke _IPV4_RE's leading \b on the ".168.1.1" left behind -- running
-# IPv4 first redacts the dotted quad as one unit before IPv6 ever sees it.
-_IPV6_RE = re.compile(
-    r"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b"
-    r"|\b(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,5})?(?![0-9a-fA-F:])"
-    r"|\B::(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}\b"
-    r"|\b[0-9a-fA-F]{1,4}::(?![0-9a-fA-F:])"
 )
 
 
@@ -79,12 +74,26 @@ def _scrub_embedded_identifiers(text):
     there is no ValueError path that could fail open (redact_trace's own
     rule is "fails CLOSED", per _identifies_operator's docstring above).
     """
-    text = _MAC_RE.sub(REDACTED, text)
-    # IPv4 before IPv6 (see _IPV6_RE's comment above): an IPv4-mapped
-    # address like "::ffff:192.168.1.1" must have its dotted quad redacted
-    # as one unit before _IPV6_RE gets a chance to eat into it.
+    # Order matters, and is IPv4 -> IPv6 -> MAC, each for the same
+    # consume-and-starve reason: an earlier ordering ran MAC first, and its
+    # exactly-2-hex-digit-group colon form matches the first six groups of
+    # any IPv6 address that happens to be written in all-two-digit-group
+    # canonical short form (e.g. a ULA like "fd12:34:56:78:9a:bc:de:f0"),
+    # leaving the last two groups -- unparseable on their own, so neither
+    # find_leaks() nor a plain ipaddress.ip_address() check downstream can
+    # see the residue -- unredacted. And IPv4 must run before IPv6 for the
+    # same reason (see _IPV6_RE's comment above): an IPv4-mapped address
+    # like "::ffff:192.168.1.1" needs its dotted quad claimed as one unit
+    # before _IPV6_RE's own "::"-prefixed alternative gets a chance to eat
+    # the leading octet as a bare hex group. _IPV6_RE's variable-length
+    # alternations all require a literal "::", so running it before MAC
+    # never eats into a colon-only MAC address in the same way MAC-first ate
+    # into IPv6 -- a MAC's 6 groups of exactly 2 hex digits, separated by
+    # single colons with no "::" anywhere, cannot satisfy any _IPV6_RE
+    # alternative.
     text = _IPV4_RE.sub(REDACTED, text)
-    return _IPV6_RE.sub(REDACTED, text)
+    text = _IPV6_RE.sub(REDACTED, text)
+    return _MAC_RE.sub(REDACTED, text)
 
 
 def redact_trace(trace):

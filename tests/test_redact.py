@@ -267,6 +267,21 @@ SIGNAL_SCRUB_CASES = (
     ("Cisco dot-quad MAC",
      "iface a483.e71b.2c3d",
      "iface [redacted at export]"),
+    # A re-review found these two uncovered: every existing IPv6 case above
+    # ends in a real group (":1"), so \b fires and both passed even under
+    # the pre-fix \b-anchored pattern -- neither exercises the \b ->
+    # (?![0-9a-fA-F:]) half of that fix. And MAC previously ran before
+    # IPv4/IPv6 (see _scrub_embedded_identifiers()'s ordering comment): its
+    # exactly-2-hex-digit-group colon form consumed the first six groups of
+    # this ULA, an all-two-digit-group IPv6 address, leaving the last two
+    # groups -- unparseable alone, so find_leaks() can't see the residue --
+    # unredacted.
+    ("::-terminated IPv6",
+     "HTTPS record via 2001:db8::",
+     "HTTPS record via [redacted at export]"),
+    ("all-two-hex-digit-group IPv6 ULA (fd00::/8, non-global)",
+     "HTTPS record via fd12:34:56:78:9a:bc:de:f0",
+     "HTTPS record via [redacted at export]"),
 )
 
 
