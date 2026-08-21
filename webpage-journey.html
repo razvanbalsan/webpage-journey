@@ -1320,7 +1320,8 @@
                      fact((neg.advertised || []).join(", ") || "nothing", "measured")]);
           rows.push(["We offered",
                      fact((neg.offered || []).join(", ") || "nothing (no TLS)", "measured")]);
-          rows.push(["Negotiated", fact(neg.chosen, "measured")]);
+          rows.push(["Negotiated",
+                     fact(neg.chosen || "nothing (ALPN selected no protocol)", "measured")]);
           if ((neg.unavailable || []).length) {
             rows.push(["Not offered",
                        fact(neg.unavailable.join(", ") + " — library not installed",
@@ -1408,7 +1409,13 @@
         if (!s) return [];
         var rows = (s.hops || []).map(function (h, i) {
           var detail = joined([h.url, h.location], " → ");
-          if (h.connection_reused) { detail = joined([detail, "(reused the same connection)"], "  "); }
+          // Three states, three distinct readings -- true and null must not
+          // collapse to the same silent "no note" a reader would misread as
+          // false. false stays silent (a measured negative earns no badge
+          // elsewhere in this file either); null says plainly it wasn't reported.
+          var reuseNote = h.connection_reused === true ? "(reused the same connection)" :
+                          h.connection_reused == null ? "(connection reuse not reported)" : null;
+          if (reuseNote) { detail = joined([detail, reuseNote], "  "); }
           return ["Hop " + (i + 1) + " · " + h.status, fact(detail, "measured")];
         });
         if (s.redirect_limit_reached && (s.hops || []).length) {
@@ -1497,6 +1504,12 @@
         var rows = [
           ["Status", fact([f.protocol, f.status != null ? String(f.status) : null]
             .filter(function (p) { return p; }).join(" ") || null, "measured")],
+          // Three states, three distinct readings -- see the same guard on the
+          // redirects hops above. An absent key (older-schema trace) reads the
+          // same as an explicit null: both are "not reported", not "no".
+          ["Connection", fact(f.connection_reused === true ? "reused the earlier connection" :
+                              f.connection_reused === false ? "opened fresh" :
+                              "not reported", "measured")],
           ["Content type", fact(f.content_type, "measured")],
           ["On the wire", fact(f.wire_bytes != null ? f.wire_bytes + " bytes" : null, "measured")],
           ["Decoded", fact(f.decoded_bytes != null ? f.decoded_bytes + " bytes" : null, "measured")],
@@ -1509,7 +1522,11 @@
                    (c.samesite ? " SameSite=" + c.samesite : " -SameSite");
           }).join("; ") || "none", "measured")]
         ];
-        if (f.header_bytes) {
+        // Guard each member, not just the containing object: a half-measured
+        // {"wire": null, "decoded": N} would otherwise concatenate into the
+        // literal text "null bytes on the wire" and still carry a "measured"
+        // badge asserting the whole value is trustworthy.
+        if (f.header_bytes && f.header_bytes.wire != null && f.header_bytes.decoded != null) {
           rows.push(["Header compression",
                      fact(f.header_bytes.wire + " bytes on the wire → " +
                           f.header_bytes.decoded + " decoded", "measured")]);
