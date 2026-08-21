@@ -1,4 +1,19 @@
-"""Layers 6 and 5: what was negotiated, which certificates were presented, and why they are trusted."""
+"""Layers 6 and 5: what was negotiated, which certificates were presented, and why they are trusted.
+
+Each cert entry in the collected `chain` carries an `unmeasured` list -- field
+names in that entry that were not derived, as opposed to fields that were
+looked up and are genuinely absent. Without the optional `cryptography`
+library, `ssl.SSLSocket.getpeercert()` still yields subject, issuer, validity,
+SANs and OCSP for the leaf certificate straight from the handshake -- see
+`summarise_cert_basic()` -- but `key`, `sig_algo`, `scts` and `is_ca` cannot be
+derived from that dict, so those four are always in `unmeasured` on the
+stdlib-only path (empty otherwise). `getpeercert()` only ever describes the
+peer's own leaf certificate, so intermediates and the root -- present in `chain`
+whenever cryptography is installed -- cannot be summarised at all without it;
+`chain_unparsed` on the section counts how many certificates were presented but
+could not be turned into a chain entry, so their absence is measured, not
+silent.
+"""
 
 import datetime
 import re
@@ -10,11 +25,84 @@ from wj.schema import observed, unobserved
 
 EXPIRY_WARN_DAYS = 21
 
+# The four cert fields that only cryptography's ASN.1 parsing can produce.
+# ssl.SSLSocket.getpeercert()'s dict has no equivalent for any of these.
+FIELDS_NEEDING_CRYPTOGRAPHY = ("key", "sig_algo", "scts", "is_ca")
+
 # We offer only HTTP/1.1 because that is the only framing wj/collect/http.py
 # writes. Offering h2 would make most servers agree to it and then fail on the
 # HTTP/1.1 text we send. What the host *supports* is measured separately and
 # more reliably from its DNS HTTPS record (dns.alpn_advertised).
 ALPN_PROTOCOLS = ["http/1.1"]
+
+
+def _peercert_name_component(rdns, attr):
+    """Pull one attribute (e.g. 'commonName') out of getpeercert()'s subject/issuer shape.
+
+    That shape is a tuple of RDNs, each itself a tuple of one or more
+    (attribute, value) pairs: ((('commonName', 'example.com'),),).
+    """
+    for rdn in rdns or ():
+        for key, value in rdn:
+            if key == attr:
+                return value
+    return None
+
+
+def _peercert_common_name(rdns):
+    # Mirrors summarise_cert()'s common_name(): fall back to Organization only
+    # when the Common Name is entirely absent.
+    return (_peercert_name_component(rdns, "commonName")
+            or _peercert_name_component(rdns, "organizationName"))
+
+
+def _peercert_organization(rdns):
+    return _peercert_name_component(rdns, "organizationName")
+
+
+def _parse_peercert_time(text):
+    # getpeercert() renders notBefore/notAfter as e.g. "Jul 29 22:10:08 2026 GMT".
+    return datetime.datetime.strptime(text, "%b %d %H:%M:%S %Y %Z").replace(
+        tzinfo=datetime.timezone.utc)
+
+
+def summarise_cert_basic(cert_dict, now=None):
+    """Summarise the leaf certificate from ssl.SSLSocket.getpeercert()'s dict form.
+
+    Used when the `cryptography` library is not installed. Covers every field
+    that dict can support -- subject_cn, issuer_cn, issuer_org, not_before,
+    not_after, days_left, sans, ocsp -- verified byte-for-byte against
+    summarise_cert() on a live host. key/sig_algo/scts/is_ca have no
+    equivalent in getpeercert() and are honestly absent, listed in
+    `unmeasured` rather than guessed.
+    """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    subject = cert_dict.get("subject") or ()
+    issuer = cert_dict.get("issuer") or ()
+
+    not_before_raw = cert_dict.get("notBefore")
+    not_after_raw = cert_dict.get("notAfter")
+    not_before = _parse_peercert_time(not_before_raw) if not_before_raw else None
+    not_after = _parse_peercert_time(not_after_raw) if not_after_raw else None
+
+    sans = [value for kind, value in cert_dict.get("subjectAltName") or () if kind == "DNS"]
+    ocsp = list(cert_dict.get("OCSP") or ())
+
+    return {
+        "subject_cn": _peercert_common_name(subject),
+        "issuer_cn": _peercert_common_name(issuer),
+        "issuer_org": _peercert_organization(issuer),
+        "not_before": not_before.isoformat() if not_before else None,
+        "not_after": not_after.isoformat() if not_after else None,
+        "days_left": (not_after - now).days if not_after else None,
+        "key": None,
+        "sig_algo": None,
+        "sans": sans,
+        "scts": None,
+        "ocsp": ocsp,
+        "is_ca": None,
+        "unmeasured": list(FIELDS_NEEDING_CRYPTOGRAPHY),
+    }
 
 
 def summarise_cert(der, now=None):
@@ -89,6 +177,7 @@ def summarise_cert(der, now=None):
         "scts": scts,
         "ocsp": ocsp,
         "is_ca": is_ca,
+        "unmeasured": [],
     }
 
 
@@ -219,6 +308,17 @@ def collect(ctx):
                 chain.append(summarise_cert(der))
             except Exception:
                 continue
+    else:
+        # getpeercert()'s dict describes only the peer's own leaf certificate --
+        # there is no stdlib way to summarise the intermediates/root in `ders`
+        # without cryptography, so this path can only ever produce one entry.
+        try:
+            cert_dict = tls_sock.getpeercert()
+        except Exception:
+            cert_dict = None
+        if cert_dict:
+            chain.append(summarise_cert_basic(cert_dict))
+    chain_unparsed = max(len(ders) - len(chain), 0)
 
     caa_records = ctx.results.get("dns", {}).get("records", {}).get("CAA", [])
     issuer = chain[0]["issuer_cn"] if chain else None
@@ -230,6 +330,7 @@ def collect(ctx):
         alpn=tls_sock.selected_alpn_protocol(),
         handshake_ms=handshake_ms,
         chain=chain,
+        chain_unparsed=chain_unparsed,
         trust_root=chain[-1]["subject_cn"] if len(chain) > 1 else None,
         verified=True,
         caa_match=caa_allows(caa_records, issuer, issuer_org),

@@ -9,22 +9,18 @@ class WebpageJourney < Formula
   # No LICENSE file exists in this repository at the time this formula was
   # written, so no `license` field is declared here rather than guessing one.
 
-  depends_on "pkgconf" => :build   # lets cryptography's Rust build locate OpenSSL via pkg-config
-  depends_on "rust" => :build      # cryptography has no source build path without a Rust toolchain
   depends_on "openssl@3"
   depends_on "python@3.13"
 
-  uses_from_macos "libffi"         # needed to build cffi's C extension
-
-  resource "cffi" do
-    url "https://files.pythonhosted.org/packages/9e/ef/008a1939e372c06329a3fce4279c02f328488f3526744906eeec3da7ad5f/cffi-2.1.1.tar.gz"
-    sha256 "dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be"
-  end
-
-  resource "cryptography" do
-    url "https://files.pythonhosted.org/packages/de/41/6cbdcf9142d00fe82836fbb51e503e58088575cf7a0fe1dbff6695bf0840/cryptography-50.0.0.tar.gz"
-    sha256 "eeac2acb5a20ed25e0ad6d1df9891a520b78b404266b6d11778f25d5d691a6c9"
-  end
+  # cryptography (and cffi/pycparser, which exist only to build it) is
+  # deliberately not bundled here: it is an optional extra
+  # (`pip install webpage-journey[certs]`) that upgrades certificate summaries
+  # with key type/bits, signature algorithm, SCT count and CA flag, plus
+  # parsing beyond the leaf certificate. Building it from source pulls a
+  # Rust toolchain and ~2 GB of build-only dependencies for four fields most
+  # installs never look at -- see wj/collect/tls.py. Every other field
+  # (subject, issuer, validity, SANs, OCSP) is measured by the stdlib `ssl`
+  # module alone.
 
   resource "dnspython" do
     url "https://files.pythonhosted.org/packages/8c/8b/57666417c0f90f08bcafa776861060426765fdb422eb10212086fb811d26/dnspython-2.8.0.tar.gz"
@@ -39,11 +35,6 @@ class WebpageJourney < Formula
   resource "mdurl" do
     url "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz"
     sha256 "bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba"
-  end
-
-  resource "pycparser" do
-    url "https://files.pythonhosted.org/packages/1b/7d/92392ff7815c21062bea51aa7b87d45576f649f16458d78b7cf94b9ab2e6/pycparser-3.0.tar.gz"
-    sha256 "600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29"
   end
 
   resource "pygments" do

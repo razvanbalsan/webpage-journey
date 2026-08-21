@@ -292,6 +292,43 @@ def test_render_tls_cert_row_shows_marker_when_no_fields_parsed():
     assert "no fields parsed" in out
 
 
+def test_render_tls_cert_row_distinguishes_unmeasured_key_from_no_fields_parsed():
+    # Without cryptography, key is None because it was never looked up -- not
+    # because parsing failed. The row must say so, not render the same blank
+    # "no fields parsed" text as a genuine parse failure.
+    trace = full_trace()
+    trace["tls"]["chain"] = [{"subject_cn": "example.com", "issuer_cn": "R3",
+                              "key": None, "days_left": 80, "sans": [],
+                              "unmeasured": ["key", "sig_algo", "scts", "is_ca"]}]
+    out = capture(render.render_tls, trace)
+    assert "None" not in out
+    assert "key not measured" in out
+    assert "cryptography not installed" in out
+    assert "no fields parsed" not in out
+
+
+def test_render_tls_cert_row_lists_the_other_unmeasured_fields():
+    trace = full_trace()
+    trace["tls"]["chain"] = [{"subject_cn": "example.com", "issuer_cn": "R3",
+                              "key": None, "sig_algo": None, "scts": None,
+                              "is_ca": None, "days_left": 80, "sans": [],
+                              "unmeasured": ["key", "sig_algo", "scts", "is_ca"]}]
+    out = capture(render.render_tls, trace)
+    assert "sig_algo" in out
+    assert "scts" in out
+    assert "is_ca" in out
+
+
+def test_render_tls_reports_certificates_that_could_not_be_parsed():
+    trace = full_trace()
+    trace["tls"]["chain"] = [{"subject_cn": "example.com", "issuer_cn": "R3",
+                              "key": None, "days_left": 80, "sans": [],
+                              "unmeasured": ["key", "sig_algo", "scts", "is_ca"]}]
+    trace["tls"]["chain_unparsed"] = 2
+    out = capture(render.render_tls, trace)
+    assert "+2 more certificate" in out
+
+
 def test_render_http_body_row_guards_a_partial_compression_combo_ratio_missing():
     # I1: the standing guard below sets encoding=None AND ratio=None together,
     # which never opens the `if final.get("encoding")` branch at all -- the

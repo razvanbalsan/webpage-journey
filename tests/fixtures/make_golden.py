@@ -13,7 +13,7 @@ OUT = Path(__file__).parent / "golden"
 
 def ctx_for(host, tools):
     caps = capabilities.Capabilities(
-        libs={"dns": True, "cryptography": True, "h2": False},
+        libs={"dns": True, "cryptography": True},
         tools=tools, privileged=False, can_sudo=False)
     return Context(host=host, scheme="https", port=443, path="/",
                    timeout=8.0, deadline=1e9, caps=caps, results={})
@@ -92,13 +92,14 @@ def collectors(cdn=True, with_path=True, with_local=True):
                     "not_after": "2026-08-30T00:00:00+00:00", "days_left": 10,
                     "key": {"type": "EC", "bits": 256}, "sig_algo": "ecdsa-with-SHA256",
                     "sans": [ctx.host, f"www.{ctx.host}"], "scts": 2,
-                    "ocsp": leaf_ocsp, "is_ca": False},
+                    "ocsp": leaf_ocsp, "is_ca": False, "unmeasured": []},
                    {"subject_cn": issuer_cn, "issuer_cn": intermediate_issuer_cn, "issuer_org": None,
                     "not_before": "2024-03-13T00:00:00+00:00",
                     "not_after": "2027-03-13T00:00:00+00:00", "days_left": 205,
                     "key": {"type": "RSA", "bits": 2048}, "sig_algo": "sha256WithRSAEncryption",
                     "sans": [], "scts": 0,
-                    "ocsp": intermediate_ocsp, "is_ca": True}],
+                    "ocsp": intermediate_ocsp, "is_ca": True, "unmeasured": []}],
+            chain_unparsed=0,
             trust_root=issuer_cn, verified=True, caa_match=caa_match,
             resumption={"tested": False}, legacy_versions_accepted=[])
 

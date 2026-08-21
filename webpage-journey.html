@@ -1321,10 +1321,30 @@
           // vanish with no trace a certificate sits at this position.
           var names = c.subject_cn && c.issuer_cn ? c.subject_cn + " ← " + c.issuer_cn :
                       (c.subject_cn || c.issuer_cn || null);
+          var unmeasured = c.unmeasured || [];
+          // "key" in `unmeasured` means it was never looked up (cryptography not
+          // installed) -- distinct from a genuinely null key.type, and said so
+          // plainly rather than rendering the same blank for both cases.
+          var keyText = null;
+          if (c.key && c.key.type) {
+            keyText = c.key.type + (c.key.bits != null ? c.key.bits : "");
+          } else if (unmeasured.indexOf("key") !== -1) {
+            keyText = "key not measured (cryptography not installed)";
+          }
           var daysText = c.days_left != null ? c.days_left + " days left" : null;
-          var detail = [names, daysText].filter(function (p) { return p; }).join(" · ");
+          var detail = [names, keyText, daysText].filter(function (p) { return p; }).join(" · ");
           rows.push(["Cert " + i, fact(detail || "no fields parsed", "measured")]);
+          var otherUnmeasured = unmeasured.filter(function (f) { return f !== "key"; });
+          if (otherUnmeasured.length) {
+            rows.push(["  not measured", fact(
+              otherUnmeasured.join(", ") + " (cryptography not installed)", "measured")]);
+          }
         });
+        if (s.chain_unparsed) {
+          rows.push(["More certificates", fact(
+            "+" + s.chain_unparsed + " more certificate(s) presented but not parsed "
+            + "(cryptography not installed)", "measured")]);
+        }
         return rows;
       },
       testYourself: function () {

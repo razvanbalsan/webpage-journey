@@ -3,7 +3,7 @@
   "generated_at": "2026-08-20T09:31:02+00:00",
   "tool": {
     "name": "trace.py",
-    "version": "2.1.0"
+    "version": "2.2.0"
   },
   "target": {
     "input": "https://example.com/",
@@ -18,8 +18,7 @@
     "tools": [],
     "libs": {
       "dns": true,
-      "cryptography": true,
-      "h2": false
+      "cryptography": true
     },
     "installed_during_run": []
   },
@@ -280,7 +279,8 @@
         "ocsp": [
           "http://r11.o.lencr.org"
         ],
-        "is_ca": false
+        "is_ca": false,
+        "unmeasured": []
       },
       {
         "subject_cn": "R11",
@@ -299,9 +299,11 @@
         "ocsp": [
           "http://x1.i.lencr.org/"
         ],
-        "is_ca": true
+        "is_ca": true,
+        "unmeasured": []
       }
     ],
+    "chain_unparsed": 0,
     "trust_root": "R11",
     "verified": true,
     "caa_match": null,

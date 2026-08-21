@@ -279,10 +279,19 @@ def render_tls(console, trace):
         subject, issuer = cert.get("subject_cn"), cert.get("issuer_cn")
         names = f"{subject} ← {issuer}" if subject and issuer else (subject or issuer)
         key = cert.get("key") or {}
+        unmeasured = set(cert.get("unmeasured") or ())
         # An Ed25519 key has no key_size attribute in cryptography's model, so
         # key.bits is legitimately None even though key.type is present -- the
         # old bare f"{type}{bits}" produced the literal text "Ed25519PublicKeyNone".
-        key_text = join_present([key.get("type"), key.get("bits")], sep="") if key.get("type") else None
+        # "key" in `unmeasured` means it was never looked up at all (cryptography
+        # not installed) -- distinct from key.type being genuinely None, and said
+        # so plainly rather than rendering the same blank either way.
+        if key.get("type"):
+            key_text = join_present([key.get("type"), key.get("bits")], sep="")
+        elif "key" in unmeasured:
+            key_text = "[dim]key not measured (cryptography not installed)[/dim]"
+        else:
+            key_text = None
         days_left = cert.get("days_left")
         days_text = f"{days_left} days left" if days_left is not None else None
         detail = " · ".join(p for p in (names, key_text, days_text) if p)
@@ -292,6 +301,13 @@ def render_tls(console, trace):
         rows.append((f"Cert {i}", detail or "[dim]no fields parsed[/dim]"))
         if i == 0 and cert.get("sans"):
             rows.append(("  also valid for", ", ".join(cert["sans"][:6])))
+        if unmeasured - {"key"}:
+            other = sorted(unmeasured - {"key"})
+            rows.append(("  not measured", f"[dim]{', '.join(other)} (cryptography not installed)[/dim]"))
+
+    if section.get("chain_unparsed"):
+        rows.append(("", f"[dim]+{section['chain_unparsed']} more certificate(s) presented "
+                          f"but not parsed (cryptography not installed)[/dim]"))
 
     _panel(console, _kv_table(rows), "4 · TLS handshake", (6, 5), "dark_orange3")
 

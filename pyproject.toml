@@ -10,8 +10,10 @@ requires-python = ">=3.13"
 dependencies = [
     "rich",
     "dnspython",
-    "cryptography>=42.0",
 ]
+
+[project.optional-dependencies]
+certs = ["cryptography>=42.0"]
 
 [project.scripts]
 webpage-journey = "wj.cli:main"

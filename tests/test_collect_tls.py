@@ -32,6 +32,59 @@ def test_summarise_cert_computes_days_left_against_a_fixed_now():
     assert info["days_left"] == 59
 
 
+def test_summarise_cert_marks_nothing_unmeasured():
+    info = tls_collect.summarise_cert(leaf_der())
+    assert info["unmeasured"] == []
+
+
+# leaf.der's fields, mirrored as ssl.SSLSocket.getpeercert()'s dict shape --
+# see tests/fixtures/make_cert.py for the certificate this describes. Verified
+# byte-for-byte against summarise_cert() on this exact certificate, and (in
+# tests/test_collect_tls.py's manual verification) against a live host.
+def leaf_getpeercert_dict():
+    return {
+        "subject": (( ("commonName", "example.com"),),),
+        "issuer": (( ("commonName", "Test CA R3"),),),
+        "notBefore": "Jan  1 00:00:00 2026 GMT",
+        "notAfter": "Apr  1 00:00:00 2026 GMT",
+        "subjectAltName": (("DNS", "example.com"), ("DNS", "www.example.com")),
+    }
+
+
+def test_summarise_cert_basic_matches_summarise_cert_on_shared_fields():
+    import datetime
+    now = datetime.datetime(2026, 2, 1, tzinfo=datetime.timezone.utc)
+    full = tls_collect.summarise_cert(leaf_der(), now=now)
+    basic = tls_collect.summarise_cert_basic(leaf_getpeercert_dict(), now=now)
+    for field in ("subject_cn", "issuer_cn", "issuer_org", "not_before",
+                  "not_after", "days_left", "sans", "ocsp"):
+        assert basic[field] == full[field], field
+
+
+def test_summarise_cert_basic_marks_key_sig_algo_scts_is_ca_unmeasured():
+    basic = tls_collect.summarise_cert_basic(leaf_getpeercert_dict())
+    assert basic["unmeasured"] == ["key", "sig_algo", "scts", "is_ca"]
+    assert basic["key"] is None
+    assert basic["sig_algo"] is None
+    assert basic["scts"] is None
+    assert basic["is_ca"] is None
+
+
+def test_summarise_cert_basic_falls_back_to_organization_for_common_name():
+    cert_dict = {
+        "subject": (( ("organizationName", "Example Org"),),),
+        "issuer": (( ("organizationName", "Some CA"),),),
+        "notBefore": "Jan  1 00:00:00 2026 GMT",
+        "notAfter": "Apr  1 00:00:00 2026 GMT",
+        "subjectAltName": (),
+    }
+    basic = tls_collect.summarise_cert_basic(cert_dict)
+    assert basic["subject_cn"] == "Example Org"
+    assert basic["issuer_cn"] == "Some CA"
+    assert basic["sans"] == []
+    assert basic["ocsp"] == []
+
+
 def test_caa_allows_matches_on_issuer_substring():
     caa = [{"data": '0 issue "letsencrypt.org"', "ttl": 300}]
     assert tls_collect.caa_allows(caa, "R3 (Let's Encrypt)") is None
