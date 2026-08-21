@@ -224,6 +224,60 @@ def test_the_structural_walker_reaches_the_negotiation_section():
     assert not leaked, leaked
 
 
+# Every hole a re-review found in _scrub_embedded_identifiers()
+# (wj/redact.py), planted into negotiation.signal the same way the test
+# above does. A prior round of this fix had no test touching the scrubber
+# beyond the plain-private-IPv4 case above, which even a fail-open,
+# IPv4-only, no-IPv6 implementation already passed -- "347 passed" on a
+# scrubber with three open holes.
+#
+# Exact string equality, not a substring-absence check: an earlier version
+# of this test asserted only that the full original address (e.g.
+# "192.168.1.1") no longer appeared anywhere, which a PARTIAL leak sails
+# straight through -- the actual regression this round fixed left
+# "[redacted at export].168.1.1" behind (the leading "192" consumed by an
+# over-matching IPv6 alternative, the trailing ".168.1.1" then too short to
+# match _IPV4_RE at all), and "192.168.1.1" is indeed not a substring of
+# that, so a not-in check on the whole address would have passed right over
+# it. It is also not IPv4-shaped, so the structural walker (find_leaks,
+# below) cannot see it either -- exact equality is the only check precise
+# enough to catch a truncation like this.
+SIGNAL_SCRUB_CASES = (
+    ("operator's own public IP",
+     "HTTPS record via 81.180.20.7",
+     "HTTPS record via [redacted at export]"),
+    ("leading-zero IPv4 (unparseable by ipaddress)",
+     "HTTPS record via 192.168.01.1",
+     "HTTPS record via [redacted at export]"),
+    ("link-local IPv6",
+     "HTTPS record via fe80::1",
+     "HTTPS record via [redacted at export]"),
+    ("global IPv6",
+     "HTTPS record via 2001:db8::1",
+     "HTTPS record via [redacted at export]"),
+    ("IPv4-mapped IPv6",
+     "HTTPS record via ::ffff:192.168.1.1",
+     "HTTPS record via [redacted at export]:[redacted at export]"),
+    ("IPv4-mapped IPv6, uppercase prefix, public octets",
+     "HTTPS record via ::FFFF:81.180.20.7",
+     "HTTPS record via [redacted at export]:[redacted at export]"),
+    ("hyphen-separated MAC",
+     "iface A4-83-E7-1B-2C-3D",
+     "iface [redacted at export]"),
+    ("Cisco dot-quad MAC",
+     "iface a483.e71b.2c3d",
+     "iface [redacted at export]"),
+)
+
+
+@pytest.mark.parametrize("label, planted, expected", SIGNAL_SCRUB_CASES)
+def test_the_negotiation_signal_scrubber_closes_every_known_hole(label, planted, expected):
+    trace = sample_trace()
+    trace["negotiation"]["signal"] = planted
+    out = redact.redact_trace(trace)
+    assert out["negotiation"]["signal"] == expected, label
+
+
 LEAKED_IDENTIFIERS = ("aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66",
                       "192.168.1.23", "192.168.1.1", "81.180.20.7")
 

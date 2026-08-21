@@ -10,17 +10,37 @@ REDACTED = "[redacted at export]"
 
 LOCAL_FIELDS = ("local_ip", "local_mac", "gateway_ip", "gateway_mac", "public_ip")
 
-_MAC_RE = re.compile(r"\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b")
+# Colon (aa:bb:cc:dd:ee:ff), hyphen (aa-bb-cc-dd-ee-ff), and Cisco dot-quad
+# (aaaa.bbbb.cccc) forms. _scrub_embedded_identifiers()'s docstring promises
+# "any MAC address" -- colon is the only form any collector in this
+# codebase actually emits today, but a re-review caught that promise being
+# wider than an earlier, colon-only version of this pattern. Matching all
+# three, rather than narrowing the docstring, is the right fix: this
+# function exists to be a backstop for a string that does not exist yet,
+# and a MAC in one of the other two forms is exactly that case.
+_MAC_RE = re.compile(
+    r"\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b"
+    r"|\b[0-9a-fA-F]{2}(?:-[0-9a-fA-F]{2}){5}\b"
+    r"|\b[0-9a-fA-F]{4}(?:\.[0-9a-fA-F]{4}){2}\b"
+)
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 # Covers full 8-group form, "::"-compressed forms at any position, and bare
-# "::1" -- deliberately permissive (see tests/test_redact.py's identical
-# walker regex, which this mirrors) since over-matching here only means an
-# extra REDACTED in free text, not a missed identifier.
+# "::1". The two variable-length alternations end on a negative lookahead
+# for a further hex/colon character, not \b: a re-review found \b false
+# NEGATIVE at the very end of an address like "2001:db8::" followed by
+# whitespace -- both the trailing ":" and the whitespace are non-word
+# characters, so \b never fires there and only "db8::" got matched,
+# leaving "2001:" unredacted. _scrub_embedded_identifiers() below also
+# runs this AFTER _IPV4_RE, not before: an IPv4-mapped address like
+# "::ffff:192.168.1.1" let this pattern's own "::ffff:192" alternative
+# consume the leading "192" as a bare hex group when run first, which
+# broke _IPV4_RE's leading \b on the ".168.1.1" left behind -- running
+# IPv4 first redacts the dotted quad as one unit before IPv6 ever sees it.
 _IPV6_RE = re.compile(
     r"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b"
-    r"|\b(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,5})?\b"
+    r"|\b(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,5})?(?![0-9a-fA-F:])"
     r"|\B::(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}\b"
-    r"|\b[0-9a-fA-F]{1,4}::\B"
+    r"|\b[0-9a-fA-F]{1,4}::(?![0-9a-fA-F:])"
 )
 
 
@@ -60,8 +80,11 @@ def _scrub_embedded_identifiers(text):
     rule is "fails CLOSED", per _identifies_operator's docstring above).
     """
     text = _MAC_RE.sub(REDACTED, text)
-    text = _IPV6_RE.sub(REDACTED, text)
-    return _IPV4_RE.sub(REDACTED, text)
+    # IPv4 before IPv6 (see _IPV6_RE's comment above): an IPv4-mapped
+    # address like "::ffff:192.168.1.1" must have its dotted quad redacted
+    # as one unit before _IPV6_RE gets a chance to eat into it.
+    text = _IPV4_RE.sub(REDACTED, text)
+    return _IPV6_RE.sub(REDACTED, text)
 
 
 def redact_trace(trace):
