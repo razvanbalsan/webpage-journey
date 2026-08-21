@@ -1397,9 +1397,16 @@
                     ["Requested URL", fact(f.url, "measured")]];
         // HTTP/2 only -- HTTP/1.1 has no streams to number, so an absent
         // stream_id on an h1 trace is the correct reading, not a gap.
+        //
+        // The id is the measurement; "HTTP/2 carries each request on its own
+        // stream" is a protocol fact true of every h2 request. It does NOT say
+        // this connection was shared: on the redirect-free h2 trace this row
+        // exists for, exactly one stream was measured and nothing was observed
+        // sharing anything. The Connection row on the Response step and the
+        // per-hop rows on the Redirects step are what report sharing.
         if (f.stream_id != null) {
-          rows.push(["Stream", fact("stream " + f.stream_id +
-            " — this request's own stream on the shared connection", "measured")]);
+          rows.push(["Stream", fact(f.stream_id +
+            " — HTTP/2 carries each request on its own stream", "measured")]);
         }
         return rows;
       },

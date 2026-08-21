@@ -1,5 +1,7 @@
 import io
+import json
 import re
+from pathlib import Path
 
 import pytest
 from rich.console import Console
@@ -524,21 +526,84 @@ def test_negotiation_line_is_silent_when_the_section_is_unobserved():
 # markup. Both renderers of the ALPN facts are covered here.
 # ---------------------------------------------------------------------------
 
+def _golden(name="h2-host.json"):
+    """A committed golden -- a real document the generator produced, not a
+    hand-built dict. The pointer tests below are claims about what a user
+    actually sees, so they are checked against a whole rendered report."""
+    path = Path(__file__).resolve().parent / "fixtures" / "golden" / name
+    return json.loads(path.read_text())
+
+
+def _report(trace=None):
+    return _unwrapped(capture(render.render_trace, trace or _golden()))
+
+
+def _panel_text(report, title, next_title):
+    """Everything the report prints between two panel titles."""
+    start = report.index(title)
+    return report[start:report.index(next_title, start)]
+
+
 def test_render_dns_does_not_claim_alpn_is_deliberately_not_what_we_negotiated():
     # Guarded the way tests/test_cli.py guards the --help copy. This claim was
     # corrected in webpage-journey.html, wj/cli.py and README.md and missed
     # here, leaving the repo's last surviving copy. "Deliberately" makes it a
-    # claim about this tool's DESIGN, which this branch falsified: the TLS
-    # handshake panel now reports what ALPN actually selected.
+    # claim about this tool's DESIGN, which this branch falsified: what ALPN
+    # actually selected is now reported.
     trace = full_trace()
     trace["dns"]["records"]["HTTPS"] = [{"data": '1 . alpn="h2"', "ttl": 300}]
     trace["dns"]["alpn_advertised"] = ["h2"]
     out = _unwrapped(capture(render.render_dns, trace))
 
     assert "deliberately not what this tool negotiated" not in out
-    # Mirrors the page's own wording for this row.
     assert "what the host says it supports" in out
-    assert "see Negotiated in the TLS handshake panel" in out
+
+
+def test_the_dns_alpn_pointer_names_output_this_renderer_actually_prints():
+    # A pointer is a claim about this tool's own output, bound by the same
+    # rule as any measured field -- so it is checked against the RENDERED
+    # REPORT, not against a substring of the source. The first version of this
+    # test asserted the literal pointer string was present, which is why it
+    # sailed past a pointer that named a row the terminal does not have.
+    report = _report()
+
+    assert "the protocol negotiation line just below this panel" in report
+
+    # The thing the pointer names must exist...
+    negotiation_line = "Host advertises"
+    assert negotiation_line in report
+
+    # ...and be where the pointer says it is: after the DNS panel this row
+    # sits in, and before the next panel (render_trace prints the negotiation
+    # one-liner between them).
+    dns_at = report.index("2 · DNS resolution")
+    line_at = report.index(negotiation_line)
+    tcp_at = report.index("3 · TCP connection")
+    assert dns_at < line_at < tcp_at, (dns_at, line_at, tcp_at)
+
+    # And it must be the line that actually carries the negotiated protocol.
+    assert "chose h2" in report
+
+
+def test_the_dns_alpn_pointer_promises_no_row_the_named_panel_does_not_have():
+    # The exact regression this replaces: the pointer was mirrored verbatim
+    # from webpage-journey.html, whose TLS Handshake step really does have a
+    # "Negotiated" row. This renderer's TLS panel has rows Protocol / Cipher /
+    # ALPN / Handshake / Trusted via / CAA / Cert n and no Negotiated row at
+    # all, so "Negotiated" occurred exactly once in the whole report: inside
+    # the pointer promising it.
+    #
+    # Written as a conditional rather than banning the word, so that adding a
+    # real Negotiated row to render_tls stays an open option -- it just has to
+    # exist before anything may point at it.
+    report = _report()
+    pointer = next(line for line in report.split("├──") if "ALPN advertised" in line)
+
+    if "TLS handshake panel" in pointer:
+        tls_panel = _panel_text(report, "4 · TLS handshake", "5 · Crossing the internet")
+        assert "Negotiated" in tls_panel, (
+            "the ALPN row points at a Negotiated row in the TLS handshake "
+            "panel, which does not print one")
 
 
 def test_render_dns_shows_an_alpn_token_literally_instead_of_parsing_it_as_markup():
@@ -611,7 +676,24 @@ def test_render_http_shows_the_stream_id_when_one_was_measured():
     trace = full_trace()
     trace["http"]["final"]["stream_id"] = 5
     out = _unwrapped(capture(render.render_http, trace))
-    assert "stream 5" in out
+    assert "Stream 5" in out
+    assert "HTTP/2 carries each request on its own stream" in out
+
+
+def test_the_stream_row_does_not_claim_a_connection_was_shared():
+    # The row said "on the shared connection" -- inside a value the page badges
+    # measured. On the redirect-free HTTP/2 trace this row exists for, exactly
+    # one stream was measured and nothing was observed sharing anything.
+    # connection_reused and the hop rows report sharing; this row reports a
+    # stream id and a protocol fact.
+    trace = full_trace()
+    trace["http"]["hops"] = []
+    trace["http"]["final"]["stream_id"] = 1
+    trace["http"]["final"].pop("connection_reused", None)
+    out = _unwrapped(capture(render.render_http, trace))
+
+    assert "Stream 1" in out
+    assert "shared connection" not in out
 
 
 def test_render_http_shows_no_stream_row_on_an_http1_trace():

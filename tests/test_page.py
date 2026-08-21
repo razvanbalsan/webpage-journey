@@ -47,6 +47,16 @@ def test_the_request_step_reads_the_measured_stream_id(page):
     assert '"Stream"' in page or '["Stream"' in page
 
 
+def test_the_stream_row_does_not_claim_a_connection_was_shared(page):
+    # The row said "this request's own stream on the shared connection" inside
+    # a value badged `measured`. On the redirect-free HTTP/2 trace the row
+    # exists for, exactly one stream was measured and nothing was observed
+    # sharing anything. Sharing is what the Connection row and the per-hop
+    # rows report, from connection_reused.
+    assert "shared connection" not in page
+    assert "HTTP/2 carries each request on its own stream" in page
+
+
 def test_the_page_does_not_carry_the_retired_alpn_claim(page):
     # The claim this branch falsified, corrected here first and then in
     # wj/render.py -- guarded on both sides so neither can drift back alone.

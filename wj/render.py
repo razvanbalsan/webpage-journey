@@ -183,10 +183,19 @@ def render_dns(console, trace):
         alpn_text = ", ".join(alpn) if alpn else "(record present, no ALPN param)"
         ech = section.get("ech")
         ech_text = "yes" if ech is True else "no" if ech is False else "unknown"
-        # Mirrors webpage-journey.html's own wording for this row. The
-        # retired "deliberately not what this tool negotiated" claim was a
-        # claim about this tool's DESIGN, and this branch falsified it: the
-        # TLS handshake panel now reports what ALPN actually selected.
+        # The retired "deliberately not what this tool negotiated" claim was a
+        # claim about this tool's DESIGN, and this branch falsified it: what
+        # ALPN actually selected is now reported. The pointer must name where
+        # THIS renderer reports it, which is render_negotiation_line()'s
+        # one-liner -- printed by render_trace() immediately after this panel.
+        #
+        # NOT "see Negotiated in the TLS handshake panel", which is the page's
+        # correct wording for the page (webpage-journey.html's TLS Handshake
+        # step really does have that row) and a false claim here: this
+        # renderer's TLS panel has no Negotiated row, so mirroring the page
+        # verbatim into a renderer with a different structure just replaced
+        # one false claim with another. A pointer is a claim about this tool's
+        # own output and is bound by the same rule as any other.
         #
         # Text(), not a markup f-string: alpn_text is built from the target's
         # own DNS HTTPS record. Interpolated into markup, a host publishing
@@ -194,8 +203,8 @@ def render_dns(console, trace):
         # the measured token, and a malformed tag such as "[/foo]" raised
         # MarkupError and aborted the render after a successful trace.
         tree.add(Text("ALPN advertised (HTTPS record — what the host says it "
-                      "supports; see Negotiated in the TLS handshake panel "
-                      f"for what this tool actually got): {alpn_text}",
+                      "supports; the protocol negotiation line just below this "
+                      f"panel reports what this tool actually got): {alpn_text}",
                       style="dim"))
         tree.add(f"[dim]ECH (Encrypted Client Hello) advertised: {ech_text}[/dim]")
     elif "HTTPS" in records_map and "HTTPS" not in failed:
@@ -459,8 +468,15 @@ def render_http(console, trace):
         ("Header compression", header_compression),
         # HTTP/2 only: h1 has no streams to number, so an absent stream_id is
         # the correct reading of an HTTP/1.1 trace and _kv_table drops the row.
-        ("Stream", f"stream {final['stream_id']} on the shared connection"
-                   if final.get("stream_id") is not None else None),
+        #
+        # The id is the measurement; "HTTP/2 carries each request on its own
+        # stream" is a protocol fact true of every h2 request. What is NOT
+        # said is that this connection was shared -- on the redirect-free h2
+        # trace this row exists for, exactly one stream was measured and
+        # nothing was observed sharing anything. connection_reused (Status,
+        # above) and the hop rows are what report sharing, when it happened.
+        ("Stream", f"{final['stream_id']} — HTTP/2 carries each request on its "
+                   f"own stream" if final.get("stream_id") is not None else None),
         ("CDN", section.get("cdn")),
         ("Cache", cache_value),
         ("Security grade", (section.get("security") or {}).get("grade")),
