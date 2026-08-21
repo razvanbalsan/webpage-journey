@@ -367,6 +367,8 @@ def render_http(console, trace):
     else:
         colour = "green" if 200 <= status < 300 else "yellow" if status < 400 else "red"
         status_text = f"[{colour} bold]{' '.join(p for p in (protocol, str(status)) if p)}[/{colour} bold]"
+    if final.get("connection_reused"):
+        status_text = join_present([status_text, "reused connection"], sep=" · ")
 
     rows = []
     for hop in section.get("hops") or []:

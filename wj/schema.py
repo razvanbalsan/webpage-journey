@@ -182,8 +182,14 @@ def build_osi(trace):
             l5_facts.append("connection reuse not measured for part of this chain")
         elif any(transitions):
             reused_count = sum(1 for t in transitions if t)
+            # Not "redirect(s)": the reused leg is often the final, non-
+            # redirect response (the canonical single-redirect h2 case has
+            # 0 redirects reusing anything -- the final response is what
+            # reused hops[0]'s connection). "requests after the first" is
+            # exactly true for every shape, redirect or not.
             l5_facts.append(
-                f"{reused_count} of {len(hops)} redirect(s) reused the previous connection")
+                f"{reused_count} of {len(transitions)} request(s) after the "
+                f"first reused the connection")
         else:
             l5_facts.append("1 request over this connection")
             if hops:

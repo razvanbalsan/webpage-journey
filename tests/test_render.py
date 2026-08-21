@@ -175,6 +175,32 @@ def test_render_http_says_truncated_when_redirect_limit_reached():
     assert "truncated" in out.lower()
 
 
+def test_render_http_marks_the_final_response_as_reused_when_it_was():
+    # Important, post-C7: final.connection_reused is measured (the canonical
+    # single-redirect h2 case has it True while the hop itself is False --
+    # see wj/schema.py's L5 derivation) but was rendered nowhere. The hop row
+    # already gets a "reused connection" marker when True; the final
+    # response needs the same, on the same three-state basis.
+    trace = full_trace()
+    trace["http"]["hops"] = [{"status": 301, "url": "https://example.com/",
+                              "location": "https://example.com/next",
+                              "connection_reused": False}]
+    trace["http"]["final"]["connection_reused"] = True
+    out = capture(render.render_http, trace)
+    assert "reused connection" in out
+
+
+def test_render_http_does_not_mark_the_final_response_reused_when_false_or_absent():
+    trace = full_trace()
+    trace["http"]["final"]["connection_reused"] = False
+    out = capture(render.render_http, trace)
+    assert "reused connection" not in out
+
+    trace2 = full_trace()
+    out2 = capture(render.render_http, trace2)   # connection_reused absent entirely
+    assert "reused connection" not in out2
+
+
 def test_render_http_shows_every_request_and_response_header():
     trace = full_trace()
     trace["http"]["final"]["request"] = {
@@ -420,6 +446,19 @@ def test_negotiation_line_says_not_collected_when_observed_false_and_why_not_is_
     trace["negotiation"] = {"observed": False, "why_not": None}
     out = capture(render.render_negotiation_line, trace)
     assert "not collected" in out
+    assert "None" not in out
+
+
+def test_render_http_does_not_crash_when_header_bytes_is_missing_the_decoded_key():
+    # C7 Minor B, corrected: the finding named {"wire": 20} -- a dict present
+    # but missing "decoded" entirely -- as the shape that raised
+    # KeyError: 'decoded' via final['header_bytes']['decoded']. The standing
+    # guard test above uses {"wire": 129, "decoded": None} instead, which
+    # fails on the literal-None leak, not on a KeyError -- a different bug
+    # in the same code, and not proof this one is fixed. This is that shape.
+    trace = full_trace()
+    trace["http"]["final"]["header_bytes"] = {"wire": 20}
+    out = capture(render.render_http, trace)
     assert "None" not in out
 
 

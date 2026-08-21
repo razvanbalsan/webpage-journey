@@ -337,6 +337,32 @@ def test_l5_does_not_claim_new_connections_when_reuse_is_unmeasured():
     assert "reused" not in joined
 
 
+def test_l5_reused_wording_does_not_attribute_the_final_leg_to_a_redirect():
+    # Important, post-C7: on the canonical single-redirect h2 case, the
+    # request that reused the connection is `final`, not a redirect -- zero
+    # redirects reused anything. "N of M redirect(s) reused" would assert
+    # the opposite of what the trace measured. Also checks the two mixed
+    # shapes the reviewer probed: hops that are themselves all fresh, with
+    # only the final leg reused, and a chain where one hop AND the final
+    # leg both reused. In every shape the wording must stay generic ("...
+    # request(s) after the first...") rather than call any of them a
+    # redirect that reused something it did not.
+    cases = [
+        ([False], True, "1 of 1"),
+        ([False, False], True, "1 of 2"),
+        ([False, True], True, "2 of 2"),
+    ]
+    for hop_flags, final_flag, expected_count in cases:
+        trace = full_trace()
+        trace["http"]["hops"] = [{"status": 301, "connection_reused": f}
+                                 for f in hop_flags]
+        trace["http"]["final"]["connection_reused"] = final_flag
+        osi = schema.build_osi(trace)
+        joined = " ".join(osi["l5"]["facts"])
+        assert "redirect(s) reused" not in joined, (hop_flags, joined)
+        assert f"{expected_count} request(s) after the first reused" in joined, (hop_flags, joined)
+
+
 def test_l7_names_the_negotiated_protocol():
     trace = full_trace()
     trace["negotiation"] = {"observed": True, "advertised": ["h2"],
