@@ -1152,7 +1152,8 @@
         if (httpsRecords && httpsRecords.length) {
           var alpn = s.alpn_advertised || [];
           rows.push(["ALPN advertised (HTTPS record — what the host says it " +
-            "supports, deliberately not what this tool negotiated)", fact(
+            "supports; see Negotiated on the TLS Handshake step for what this " +
+            "tool actually got)", fact(
             alpn.length ? alpn.join(", ") : "(record present, no ALPN param)", "measured")]);
           rows.push(["ECH (Encrypted Client Hello) advertised", fact(
             s.ech === true ? "yes" : s.ech === false ? "no" : "unknown", "measured")]);
@@ -1313,6 +1314,19 @@
                        s.caa_match === false ? "issuer NOT listed" : "no comparable record",
                        "measured")]
         ];
+        var neg = traceSection("negotiation");
+        if (neg) {
+          rows.push(["Host advertises",
+                     fact((neg.advertised || []).join(", ") || "nothing", "measured")]);
+          rows.push(["We offered",
+                     fact((neg.offered || []).join(", ") || "nothing (no TLS)", "measured")]);
+          rows.push(["Negotiated", fact(neg.chosen, "measured")]);
+          if ((neg.unavailable || []).length) {
+            rows.push(["Not offered",
+                       fact(neg.unavailable.join(", ") + " — library not installed",
+                            "measured")]);
+          }
+        }
         (s.chain || []).forEach(function (c, i) {
           // A chain entry can carry neither a Common Name nor an Organization
           // Name (wj/collect/tls.py's common_name() returns None for both) —
@@ -1393,8 +1407,9 @@
         var s = traceSection("http");
         if (!s) return [];
         var rows = (s.hops || []).map(function (h, i) {
-          return ["Hop " + (i + 1) + " · " + h.status,
-                  fact(joined([h.url, h.location], " → "), "measured")];
+          var detail = joined([h.url, h.location], " → ");
+          if (h.connection_reused) { detail = joined([detail, "(reused the same connection)"], "  "); }
+          return ["Hop " + (i + 1) + " · " + h.status, fact(detail, "measured")];
         });
         if (s.redirect_limit_reached && (s.hops || []).length) {
           // A hop count alone reads as the whole chain — say plainly it was cut short.
@@ -1479,7 +1494,7 @@
         var s = traceSection("http");
         if (!s) return [];
         var f = s.final || {}, sec = s.security || {};
-        return [
+        var rows = [
           ["Status", fact([f.protocol, f.status != null ? String(f.status) : null]
             .filter(function (p) { return p; }).join(" ") || null, "measured")],
           ["Content type", fact(f.content_type, "measured")],
@@ -1494,6 +1509,12 @@
                    (c.samesite ? " SameSite=" + c.samesite : " -SameSite");
           }).join("; ") || "none", "measured")]
         ];
+        if (f.header_bytes) {
+          rows.push(["Header compression",
+                     fact(f.header_bytes.wire + " bytes on the wire → " +
+                          f.header_bytes.decoded + " decoded", "measured")]);
+        }
+        return rows;
       },
       testYourself: function () {
         return "curl -sSI https://" + host() + "/\n" +
