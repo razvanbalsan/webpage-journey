@@ -210,6 +210,23 @@ def render_dns(console, trace):
     _panel(console, tree, "2 · DNS resolution", (7, 4, 3), "blue")
 
 
+def render_negotiation_line(console, trace):
+    """One line, not a panel — which protocol was chosen and on what evidence."""
+    section = trace.get("negotiation", {})
+    if not section.get("observed"):
+        console.print(f"[dim]Protocol negotiation not observed — "
+                      f"{section.get('why_not', 'not collected')}[/dim]")
+        return
+
+    advertised = ", ".join(section.get("advertised") or []) or "nothing"
+    offered = ", ".join(section.get("offered") or []) or "nothing (no TLS)"
+    chosen = section.get("chosen")
+    tail = f"chose {chosen}" if chosen else "no protocol selected"
+    console.print(f"[dim]Host advertises {advertised} "
+                  f"({section.get('signal', 'unknown signal')}) · "
+                  f"offered {offered} · {tail}[/dim]")
+
+
 def render_tcp(console, trace):
     section = trace.get("tcp", {})
     if not section.get("observed"):
@@ -353,8 +370,10 @@ def render_http(console, trace):
 
     rows = []
     for hop in section.get("hops") or []:
-        rows.append((f"{hop['status']} redirect",
-                     join_present([hop.get("url"), hop.get("location")], sep=" → ")))
+        detail = join_present([hop.get("url"), hop.get("location")], sep=" → ")
+        if hop.get("connection_reused"):
+            detail = join_present([detail, "reused connection"], sep=" · ")
+        rows.append((f"{hop['status']} redirect", detail))
     if section.get("redirect_limit_reached") and section.get("hops"):
         # A hop count alone reads as the whole chain — say plainly that it was cut short.
         rows.append(("", f"[dim]redirect chain truncated after "
@@ -390,6 +409,10 @@ def render_http(console, trace):
         ("Total", f"{final.get('total_ms')} ms" if final.get("total_ms") is not None else None),
         ("Body", body_text),
         ("Content type", final.get("content_type")),
+        ("Header compression",
+         (f"{final['header_bytes']['wire']} bytes on the wire → "
+          f"{final['header_bytes']['decoded']} decoded"
+          if final.get("header_bytes") else None)),
         ("CDN", section.get("cdn")),
         ("Cache", cache_value),
         ("Security grade", (section.get("security") or {}).get("grade")),
@@ -563,6 +586,7 @@ def render_trace(console, trace):
 
     render_local(console, trace)
     render_dns(console, trace)
+    render_negotiation_line(console, trace)
     render_tcp(console, trace)
     render_tls(console, trace)
     render_path(console, trace)

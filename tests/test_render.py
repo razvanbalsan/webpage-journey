@@ -402,3 +402,20 @@ def test_render_trace_never_prints_none_with_every_optional_subfield_absent():
     trace["osi"] = schema.build_osi(trace)
     out = capture(render.render_trace, trace)
     assert "None" not in out
+
+
+def test_negotiation_line_states_what_was_offered_and_chosen():
+    trace = full_trace()
+    trace["negotiation"] = {"observed": True, "advertised": ["h3", "h2"],
+                            "offered": ["h2", "http/1.1"], "unavailable": [],
+                            "chosen": "h2", "signal": "HTTPS record", "attempted": []}
+    out = capture(render.render_negotiation_line, trace)
+    assert "h2" in out
+    assert "HTTPS record" in out
+
+
+def test_negotiation_line_is_silent_when_the_section_is_unobserved():
+    trace = full_trace()
+    trace["negotiation"] = {"observed": False, "why_not": "skipped because dns was not observed"}
+    out = capture(render.render_negotiation_line, trace)
+    assert "not observed" in out

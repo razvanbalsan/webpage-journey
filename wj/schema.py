@@ -163,14 +163,15 @@ def build_osi(trace):
         if (tls.get("resumption") or {}).get("resumed"):
             l5_facts.append("resumed from a session ticket")
     if http.get("observed"):
-        # Every redirect hop opens a fresh connection (wj/collect/http.py sets
-        # sock = None before the next hop's fetch, and every request sends
-        # Connection: close) -- N+1 requests went over N+1 DIFFERENT
-        # connections, never one shared connection carrying all of them.
         hops = http.get("hops") or []
-        l5_facts.append("1 request over this connection")
-        if hops:
-            l5_facts.append(f"{len(hops)} redirect(s), each on a new connection")
+        reused = [h for h in hops if h.get("connection_reused")]
+        if reused:
+            l5_facts.append(
+                f"{len(reused)} of {len(hops)} redirect(s) reused the previous connection")
+        else:
+            l5_facts.append("1 request over this connection")
+            if hops:
+                l5_facts.append(f"{len(hops)} redirect(s), each on a new connection")
 
     final = http.get("final") or {}
     l6_facts = []
@@ -197,7 +198,10 @@ def build_osi(trace):
     if final.get("content_type"):
         l6_facts.append(final["content_type"])
 
+    negotiation = trace.get("negotiation", {})
     l7_facts = []
+    if negotiation.get("observed") and negotiation.get("chosen"):
+        l7_facts.append(f"negotiated {negotiation['chosen']} over ALPN")
     if http.get("observed"):
         protocol, status = final.get("protocol"), final.get("status")
         if protocol and status is not None:

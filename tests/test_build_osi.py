@@ -234,3 +234,39 @@ def test_all_optional_sub_fields_none_never_prints_the_literal_none():
     for layer, val in osi.items():
         for fact in val["facts"]:
             assert "None" not in fact, f"{layer}: leaked None in fact: {fact!r}"
+
+
+def test_l5_reports_real_reuse_under_h2():
+    trace = full_trace()
+    trace["negotiation"] = {"observed": True, "advertised": ["h2"],
+                            "offered": ["h2", "http/1.1"], "unavailable": [],
+                            "chosen": "h2", "attempted": []}
+    trace["http"]["hops"] = [{"url": "https://example.com/", "status": 301,
+                              "location": "https://www.example.com/",
+                              "protocol": "HTTP/2", "ttfb_ms": 1.0,
+                              "connection_reused": True, "stream_id": 3}]
+    osi = schema.build_osi(trace)
+    joined = " ".join(osi["l5"]["facts"])
+    assert "reused" in joined
+    assert "each on a new connection" not in joined
+
+
+def test_l5_still_says_new_connection_per_hop_under_http1():
+    trace = full_trace()
+    trace["negotiation"] = {"observed": True, "advertised": [], "offered": ["http/1.1"],
+                            "unavailable": [], "chosen": "http/1.1", "attempted": []}
+    trace["http"]["hops"] = [{"url": "http://example.com/", "status": 301,
+                              "location": "https://example.com/",
+                              "protocol": "HTTP/1.1", "ttfb_ms": 1.0,
+                              "connection_reused": False, "stream_id": None}]
+    osi = schema.build_osi(trace)
+    assert "each on a new connection" in " ".join(osi["l5"]["facts"])
+
+
+def test_l7_names_the_negotiated_protocol():
+    trace = full_trace()
+    trace["negotiation"] = {"observed": True, "advertised": ["h2"],
+                            "offered": ["h2", "http/1.1"], "unavailable": [],
+                            "chosen": "h2", "attempted": []}
+    osi = schema.build_osi(trace)
+    assert "h2" in " ".join(osi["l7"]["facts"])
