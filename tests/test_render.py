@@ -395,12 +395,31 @@ def test_render_trace_never_prints_none_with_every_optional_subfield_absent():
                         trust_root=None, resumption=None)
     trace["http"]["final"].update(protocol=None, status=None, reason=None,
                                   ttfb_ms=None, total_ms=None, encoding=None,
-                                  ratio=None, content_type=None)
+                                  ratio=None, content_type=None,
+                                  header_bytes={"wire": 129, "decoded": None},
+                                  connection_reused=None)
+    trace["http"]["hops"] = [{"status": 301, "connection_reused": None}]
     trace["http"].update(cache={"state": None, "age": None, "header": None,
                                 "directives": None}, cdn=None)
+    trace["negotiation"] = {"observed": True, "advertised": [], "offered": [],
+                            "unavailable": [], "chosen": None, "signal": None,
+                            "attempted": []}
     trace["path"].update(hops=[], asn_path=None, path_mtu=None)
     trace["osi"] = schema.build_osi(trace)
     out = capture(render.render_trace, trace)
+    assert "None" not in out
+
+
+def test_negotiation_line_says_not_collected_when_observed_false_and_why_not_is_none():
+    # C7 Minor: .get("why_not", "not collected") only substitutes when the
+    # key is absent, never when it is present and None -- a real trace state
+    # (schema.unobserved requires a reason, but a hand-built or malformed
+    # trace can still carry one). Probed directly: this crashed nothing
+    # before, it just silently rendered "not observed — None".
+    trace = full_trace()
+    trace["negotiation"] = {"observed": False, "why_not": None}
+    out = capture(render.render_negotiation_line, trace)
+    assert "not collected" in out
     assert "None" not in out
 
 

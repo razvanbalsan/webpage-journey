@@ -157,6 +157,7 @@ def build_osi(trace):
         if tcp.get("winner_family"):
             l4_facts.append(f"{tcp['winner_family']} won the connection race")
 
+    final = http.get("final") or {}
     l5_facts = []
     if tls.get("observed"):
         l5_facts.append("TLS session established")
@@ -164,16 +165,30 @@ def build_osi(trace):
             l5_facts.append("resumed from a session ticket")
     if http.get("observed"):
         hops = http.get("hops") or []
-        reused = [h for h in hops if h.get("connection_reused")]
-        if reused:
+        # Every request after the first (hops[1], hops[2], ..., and final)
+        # either reused the connection of the request immediately before it
+        # or opened its own -- exactly len(hops) such transitions: hops[1:]
+        # supplies len(hops) - 1 of them, final supplies the last. hops[0]
+        # itself is excluded: it is definitionally the first request over
+        # this trace's connection, so its own connection_reused value
+        # describes nothing about what came before it. A transition of None
+        # means the transport never reported reuse for that leg -- collapsing
+        # that into False would publish an unmeasured "opened a new
+        # connection" as if it were a measurement.
+        transitions = [h.get("connection_reused") for h in hops[1:]]
+        if hops:
+            transitions.append(final.get("connection_reused"))
+        if any(t is None for t in transitions):
+            l5_facts.append("connection reuse not measured for part of this chain")
+        elif any(transitions):
+            reused_count = sum(1 for t in transitions if t)
             l5_facts.append(
-                f"{len(reused)} of {len(hops)} redirect(s) reused the previous connection")
+                f"{reused_count} of {len(hops)} redirect(s) reused the previous connection")
         else:
             l5_facts.append("1 request over this connection")
             if hops:
                 l5_facts.append(f"{len(hops)} redirect(s), each on a new connection")
 
-    final = http.get("final") or {}
     l6_facts = []
     if tls.get("observed"):
         version_cipher = " · ".join(

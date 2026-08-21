@@ -128,9 +128,15 @@ def collectors(cdn=True, with_path=True, with_local=True):
                           "httponly": True, "samesite": "Lax"}],
              "scheme": "https"})
         return schema.observed(
+            # The redirect crosses from plain http:// (port 80) to https://
+            # (port 443) -- a scheme change, so wj/collect/http.py resets the
+            # socket for the next hop regardless of protocol. Both legs are
+            # explicitly measured as fresh (connection_reused: False), not
+            # merely absent -- an absent value reads as "not measured", not
+            # as "not reused" (see build_osi's L5 derivation).
             hops=[{"url": f"http://{ctx.host}/", "status": 301,
                    "location": f"https://{ctx.host}/", "protocol": "HTTP/1.1",
-                   "ttfb_ms": 40.1}],
+                   "ttfb_ms": 40.1, "connection_reused": False, "stream_id": None}],
             redirect_limit_reached=False,
             final={"url": f"https://{ctx.host}/", "status": 200, "reason": "OK",
                    "protocol": "HTTP/1.1",
@@ -142,7 +148,7 @@ def collectors(cdn=True, with_path=True, with_local=True):
                                ["cache-control", "max-age=300"]],
                    "ttfb_ms": 88.0, "total_ms": 109.0, "wire_bytes": 14000,
                    "decoded_bytes": 61000, "encoding": "gzip", "ratio": 4.36,
-                   "content_type": "text/html"},
+                   "content_type": "text/html", "connection_reused": False},
             cache={"state": "HIT", "age": 412, "header": "cf-cache-status",
                    "directives": "max-age=300"} if cdn else
                   {"state": None, "age": None, "header": None, "directives": "max-age=300"},

@@ -215,7 +215,7 @@ def render_negotiation_line(console, trace):
     section = trace.get("negotiation", {})
     if not section.get("observed"):
         console.print(f"[dim]Protocol negotiation not observed — "
-                      f"{section.get('why_not', 'not collected')}[/dim]")
+                      f"{section.get('why_not') or 'not collected'}[/dim]")
         return
 
     advertised = ", ".join(section.get("advertised") or []) or "nothing"
@@ -223,7 +223,7 @@ def render_negotiation_line(console, trace):
     chosen = section.get("chosen")
     tail = f"chose {chosen}" if chosen else "no protocol selected"
     console.print(f"[dim]Host advertises {advertised} "
-                  f"({section.get('signal', 'unknown signal')}) · "
+                  f"({section.get('signal') or 'unknown signal'}) · "
                   f"offered {offered} · {tail}[/dim]")
 
 
@@ -402,6 +402,11 @@ def render_http(console, trace):
                   f"({encoding})" if encoding else None
     body_text = join_present([body_sizes, body_detail], sep=" ")
 
+    header_bytes = final.get("header_bytes") or {}
+    hb_wire, hb_decoded = header_bytes.get("wire"), header_bytes.get("decoded")
+    header_compression = (f"{hb_wire} bytes on the wire → {hb_decoded} decoded"
+                          if hb_wire is not None and hb_decoded is not None else None)
+
     rows += [
         ("Status", status_text),
         ("URL", final.get("url")),
@@ -409,10 +414,7 @@ def render_http(console, trace):
         ("Total", f"{final.get('total_ms')} ms" if final.get("total_ms") is not None else None),
         ("Body", body_text),
         ("Content type", final.get("content_type")),
-        ("Header compression",
-         (f"{final['header_bytes']['wire']} bytes on the wire → "
-          f"{final['header_bytes']['decoded']} decoded"
-          if final.get("header_bytes") else None)),
+        ("Header compression", header_compression),
         ("CDN", section.get("cdn")),
         ("Cache", cache_value),
         ("Security grade", (section.get("security") or {}).get("grade")),

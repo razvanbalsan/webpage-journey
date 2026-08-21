@@ -372,7 +372,9 @@
         "status": 301,
         "location": "https://plain.example.net/",
         "protocol": "HTTP/1.1",
-        "ttfb_ms": 40.1
+        "ttfb_ms": 40.1,
+        "connection_reused": false,
+        "stream_id": null
       }
     ],
     "redirect_limit_reached": false,
@@ -401,7 +403,8 @@
       "decoded_bytes": 61000,
       "encoding": "gzip",
       "ratio": 4.36,
-      "content_type": "text/html"
+      "content_type": "text/html",
+      "connection_reused": false
     },
     "cache": {
       "state": null,
