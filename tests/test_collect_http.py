@@ -237,6 +237,49 @@ def test_final_url_names_the_hop_that_was_actually_fetched():
     assert section["redirect_limit_reached"] is True
 
 
+def test_build_request_records_the_line_and_headers_it_will_send():
+    req = http_collect.build_request("https://example.com/dashboard?q=1")
+    assert req["method"] == "GET"
+    assert req["target"] == "/dashboard?q=1"
+    assert req["http_version"] == "HTTP/1.1"
+    assert req["headers"][0] == ("Host", "example.com")
+    names = [k for k, _ in req["headers"]]
+    assert names == ["Host", "User-Agent", "Accept-Encoding", "Accept", "Connection"]
+
+
+def test_request_bytes_round_trips_through_parse_response_shape():
+    # The bytes build_request/request_bytes produce must be a valid HTTP/1.1
+    # request-message: a request line followed by CRLF-separated headers and a
+    # blank line. parse_response only parses responses, so assert on the raw form.
+    raw = http_collect.request_bytes(http_collect.build_request("https://example.com/"))
+    assert raw.startswith(b"GET / HTTP/1.1\r\n")
+    assert raw.endswith(b"\r\n\r\n")
+    assert b"Host: example.com\r\n" in raw
+
+
+def test_collect_records_the_request_that_was_sent():
+    from wj import capabilities
+    from wj.context import Context
+
+    caps = capabilities.Capabilities(libs={}, tools={}, privileged=False, can_sudo=False)
+    ctx = Context(host="example.com", scheme="https", port=443, path="/",
+                  timeout=5.0, deadline=1e9, caps=caps, results={})
+    ctx.results["tls"] = {"observed": True, "_socket": object()}
+
+    # An injected fetch (as in these tests) returns no "request" key -- collect
+    # must reconstruct the request it describes from the final fetched URL.
+    def fetch(url, sock):
+        return {"protocol": "HTTP/1.1", "status": 200, "reason": "OK",
+                "headers": [("Content-Type", "text/html")], "body": b"hi",
+                "ttfb_ms": 1.0, "total_ms": 2.0, "wire_bytes": 2}
+
+    section = http_collect.collect(ctx, fetch=fetch)
+    request = section["final"]["request"]
+    assert request["method"] == "GET"
+    assert ("Host", "example.com") in request["headers"]
+    assert any(k == "User-Agent" for k, _ in request["headers"])
+
+
 def test_collect_reports_content_type_as_absent_not_empty_string():
     from wj import capabilities
     from wj.context import Context

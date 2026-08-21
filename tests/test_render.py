@@ -175,6 +175,56 @@ def test_render_http_says_truncated_when_redirect_limit_reached():
     assert "truncated" in out.lower()
 
 
+def test_render_http_shows_every_request_and_response_header():
+    trace = full_trace()
+    trace["http"]["final"]["request"] = {
+        "method": "GET", "target": "/dashboard", "http_version": "HTTP/1.1",
+        "headers": [("Host", "example.com"),
+                    ("User-Agent", "webpage-journey/2.0"),
+                    ("Accept-Encoding", "gzip, deflate"),
+                    ("Accept", "*/*"),
+                    ("Connection", "close")]}
+    trace["http"]["final"]["headers"] = [
+        ("Content-Type", "text/html; charset=utf-8"),
+        ("Server", "ECS"),
+        ("Set-Cookie", "session=abc123; Path=/; Secure"),
+        ("X-Empty", "")]
+    out = capture(render.render_http, trace, width=120)
+
+    # Every request header, name and value, is shown -- not summarised away.
+    for name, value in trace["http"]["final"]["request"]["headers"]:
+        assert name in out
+        assert value in out
+    # Every response header is shown, including one the summary never surfaces.
+    assert "Server" in out and "ECS" in out
+    assert "Set-Cookie" in out and "session=abc123" in out
+    # A header sent with an empty value is shown, not silently dropped.
+    assert "X-Empty" in out
+    assert "None" not in out
+
+
+def test_render_http_without_captured_headers_shows_only_the_summary():
+    # A trace document that never captured headers (unobserved, or hand-built)
+    # must not sprout an empty "Request headers"/"Response headers" heading.
+    trace = full_trace()
+    trace["http"]["final"].pop("headers", None)
+    trace["http"]["final"].pop("request", None)
+    out = capture(render.render_http, trace)
+    assert "Request headers" not in out
+    assert "Response headers" not in out
+    assert "None" not in out
+
+
+def test_render_http_header_value_with_brackets_is_shown_literally():
+    # A header value containing square brackets must not be parsed as Rich
+    # markup (which would drop or mangle it) -- values are rendered as Text.
+    trace = full_trace()
+    trace["http"]["final"]["headers"] = [("X-Trace", "[edge/7] cache=[hit]")]
+    out = capture(render.render_http, trace, width=120)
+    assert "[edge/7]" in out
+    assert "cache=[hit]" in out
+
+
 def test_render_never_prints_the_literal_none_for_absent_optional_values():
     # kernel.rtt_ms is legitimately None on some platforms; cache.state/age are
     # None when the response advertises no caching; cdn is None when undetected.

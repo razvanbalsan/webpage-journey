@@ -32,6 +32,39 @@ CDN_SIGNATURES = (
 
 CACHE_HEADERS = ("cf-cache-status", "x-cache", "x-drupal-cache", "x-vercel-cache")
 
+# The fixed headers this tool sends on every hop. Kept as data (not baked into
+# an f-string) so the exact set that went out can be recorded on the trace and
+# shown back to the user, rather than reconstructed by eye from the source.
+REQUEST_HEADERS = (
+    ("User-Agent", "webpage-journey/2.0"),
+    ("Accept-Encoding", "gzip, deflate"),
+    ("Accept", "*/*"),
+    ("Connection", "close"),
+)
+
+
+def build_request(url):
+    """The request line and headers this tool sends for one hop.
+
+    Returned as structured data so collect() can record exactly what was sent
+    on the final hop and the renderer can print it verbatim. Host comes first,
+    as it does on the wire.
+    """
+    split = urlsplit(url)
+    target = split.path or "/"
+    if split.query:
+        target += "?" + split.query
+    headers = [("Host", split.hostname or "")] + list(REQUEST_HEADERS)
+    return {"method": "GET", "target": target,
+            "http_version": "HTTP/1.1", "headers": headers}
+
+
+def request_bytes(request):
+    """Serialise a build_request() dict to the raw bytes put on the socket."""
+    lines = [f"{request['method']} {request['target']} {request['http_version']}"]
+    lines += [f"{key}: {value}" for key, value in request["headers"]]
+    return ("\r\n".join(lines) + "\r\n\r\n").encode()
+
 
 def header_value(headers, name):
     target = name.lower()
@@ -203,21 +236,11 @@ def _socket_fetch(ctx):
             # the TCP/TLS collectors and closes after this response (Connection: close).
             sock = _open(split, ctx)
         try:
-            path = split.path or "/"
-            if split.query:
-                path += "?" + split.query
-            request = (
-                f"GET {path} HTTP/1.1\r\n"
-                f"Host: {split.hostname}\r\n"
-                f"User-Agent: webpage-journey/2.0\r\n"
-                f"Accept-Encoding: gzip, deflate\r\n"
-                f"Accept: */*\r\n"
-                f"Connection: close\r\n\r\n"
-            ).encode()
+            request = build_request(url)
 
             sock.settimeout(ctx.budget_for(ctx.timeout))
             started = time.perf_counter()
-            sock.sendall(request)
+            sock.sendall(request_bytes(request))
 
             chunks = []
             ttfb = None
@@ -234,6 +257,7 @@ def _socket_fetch(ctx):
 
             raw = b"".join(chunks)
             parsed = parse_response(raw)
+            parsed["request"] = request
             parsed["ttfb_ms"] = ttfb
             parsed["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
             parsed["wire_bytes"] = len(parsed["body"])
@@ -311,6 +335,7 @@ def collect(ctx, fetch=None):
         redirect_limit_reached=limit_reached,
         final={"url": fetched_url, "status": response["status"], "reason": response.get("reason"),
                "protocol": response.get("protocol"), "headers": response["headers"],
+               "request": response.get("request") or build_request(fetched_url),
                "ttfb_ms": response.get("ttfb_ms"), "total_ms": response.get("total_ms"),
                "wire_bytes": wire, "decoded_bytes": decoded_bytes,
                "encoding": encoding, "ratio": ratio, "content_type": content_type},

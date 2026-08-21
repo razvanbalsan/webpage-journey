@@ -1,6 +1,7 @@
 """All terminal rendering for a trace run."""
 
 from rich import box
+from rich.console import Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -76,6 +77,26 @@ def _kv_table(rows):
     for key, value in rows:
         if value not in (None, "", []):
             table.add_row(key, str(value))
+    return table
+
+
+def _headers_table(headers):
+    """Every header, in wire order, nothing dropped or summarised.
+
+    Values are wrapped as Text (not markup) so a header value that happens to
+    contain square brackets is shown literally instead of being parsed as Rich
+    markup. A header sent with an empty value is a real, distinct fact from an
+    absent header, so it is shown as (empty) rather than silently skipped the
+    way _kv_table drops blank rows.
+    """
+    table = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
+    table.add_column(overflow="fold")
+    table.add_column(overflow="fold")
+    for key, value in headers:
+        key_text = Text(str(key), style="cyan")
+        value_text = (Text("(empty)", style="dim") if value in (None, "")
+                      else Text(str(value)))
+        table.add_row(key_text, value_text)
     return table
 
 
@@ -358,7 +379,33 @@ def render_http(console, trace):
         ("Security grade", (section.get("security") or {}).get("grade")),
         ("Missing headers", ", ".join((section.get("security") or {}).get("missing") or [])),
     ]
-    _panel(console, _kv_table(rows), "6 · HTTP request & response", (7,), "blue")
+
+    body = [_kv_table(rows)]
+
+    # The full request this tool put on the wire, and every response header it
+    # got back -- shown verbatim below the derived summary above. Each block is
+    # only added when its headers are actually present, so a trace document that
+    # never captured them (e.g. an unobserved or hand-built trace) shows the
+    # summary alone rather than an empty "Request headers" heading.
+    request = final.get("request") or {}
+    if request.get("headers"):
+        request_line = join_present([request.get("method"), request.get("target"),
+                                     request.get("http_version")])
+        body.append(Text("\nRequest headers", style="bold"))
+        if request_line:
+            body.append(Text(request_line, style="dim"))
+        body.append(_headers_table(request["headers"]))
+
+    if final.get("headers"):
+        status_line = join_present([protocol,
+                                    str(status) if status is not None else None,
+                                    final.get("reason")])
+        body.append(Text("\nResponse headers", style="bold"))
+        if status_line:
+            body.append(Text(status_line, style="dim"))
+        body.append(_headers_table(final["headers"]))
+
+    _panel(console, Group(*body), "6 · HTTP request & response", (7,), "blue")
 
 
 def render_findings(console, trace):
