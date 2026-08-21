@@ -182,6 +182,25 @@ def collect(ctx, fetch=None):
         return unobserved("no connection to send a request over")
 
     alpn = tls.get("alpn")
+
+    negotiation = ctx.results.get("negotiation")
+    if alpn and isinstance(negotiation, dict) and negotiation.get("observed"):
+        # `alpn`, not the transport's `protocol`: protocol is transport_for()'s
+        # fallback for when ALPN reported nothing, and a fallback is not a
+        # negotiated choice -- they coincide only when the server explicitly
+        # selected http/1.1 over ALPN.
+        #
+        # Recorded FIRST, before either the no-transport-module guard below or
+        # the fetcher is even built: the handshake already measured this, and
+        # every way a later step can fail is a separate fact. Sitting below the
+        # guard, a measurably-negotiated h3 was thrown away and the page then
+        # printed "Negotiated: nothing (ALPN selected no protocol)" wearing a
+        # measured badge, three rows under an "ALPN: h3" that was also measured
+        # -- a false negative, not merely a missing value. Discarding a
+        # measurement because a later step failed is the mirror image of
+        # fabricating one.
+        negotiation["chosen"] = alpn
+
     if alpn is not None and alpn not in TRANSPORTS:
         # A protocol the server actually selected but this build has no
         # transport module for at all (h3, deferred to Phase 2) -- distinct
@@ -194,18 +213,6 @@ def collect(ctx, fetch=None):
         return unobserved(f"negotiated {alpn} but this build has no transport for it")
 
     module, protocol = transport_for(ctx)
-
-    negotiation = ctx.results.get("negotiation")
-    if alpn and isinstance(negotiation, dict) and negotiation.get("observed"):
-        # `alpn`, not `protocol`: protocol is transport_for()'s fallback for
-        # when ALPN reported nothing, and a fallback is not a negotiated
-        # choice -- they coincide only when the server explicitly selected
-        # http/1.1 over ALPN. Recorded before the fetcher is even built: the
-        # handshake already measured this, and a transport that then fails
-        # to load (below) is a separate fact -- discarding a measurement
-        # because a later step failed would be the mirror image of
-        # fabricating one.
-        negotiation["chosen"] = alpn
 
     if fetch is None:
         try:
@@ -290,11 +297,22 @@ def collect(ctx, fetch=None):
         redirect_limit_reached=limit_reached,
         final={"url": fetched_url, "status": response["status"], "reason": response.get("reason"),
                "protocol": response.get("protocol"), "headers": response["headers"],
-               "request": response.get("request") or h1.build_request(fetched_url),
+               # Both transports always set "request" from what they actually
+               # put on the wire (h1.fetcher via build_request, h2.fetcher via
+               # its own pseudo-header list). There is deliberately no fallback
+               # here: the only thing a fallback could publish is an HTTP/1.1
+               # request that was never sent, which is precisely the fabricated
+               # value this project's one rule forbids.
+               "request": response.get("request"),
                "ttfb_ms": response.get("ttfb_ms"), "total_ms": response.get("total_ms"),
                "wire_bytes": wire, "decoded_bytes": decoded_bytes,
                "encoding": encoding, "ratio": ratio, "content_type": content_type,
                "header_bytes": response.get("header_bytes"),
+               # Measured by the h2 transport on every response and already
+               # carried on each redirect hop above; absent on HTTP/1.1, which
+               # has no streams to number. Without it here a redirect-free h2
+               # trace recorded no stream id anywhere in the document at all.
+               "stream_id": response.get("stream_id"),
                "connection_reused": response.get("connection_reused")},
         cache=cache_state(response["headers"]),
         cdn=detect_cdn(response["headers"]),

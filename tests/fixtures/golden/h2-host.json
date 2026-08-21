@@ -390,6 +390,41 @@
           "max-age=600"
         ]
       ],
+      "request": {
+        "method": "GET",
+        "target": "/en/index.html",
+        "http_version": "HTTP/2",
+        "headers": [
+          [
+            ":method",
+            "GET"
+          ],
+          [
+            ":path",
+            "/en/index.html"
+          ],
+          [
+            ":scheme",
+            "https"
+          ],
+          [
+            ":authority",
+            "h2.example.net"
+          ],
+          [
+            "user-agent",
+            "webpage-journey/2.0"
+          ],
+          [
+            "accept-encoding",
+            "gzip, deflate"
+          ],
+          [
+            "accept",
+            "*/*"
+          ]
+        ]
+      },
       "ttfb_ms": 10.5,
       "total_ms": 26.0,
       "wire_bytes": 9800,
@@ -401,6 +436,7 @@
         "wire": 36,
         "decoded": 92
       },
+      "stream_id": 5,
       "connection_reused": true
     },
     "cache": {

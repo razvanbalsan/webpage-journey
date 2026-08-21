@@ -2,6 +2,7 @@
 
 from wj.collect.tls import grade_expiry
 from wj.schema import add_note, join_present
+from wj.transport import TRANSPORTS
 
 POOR_GRADES = ("D", "E", "F")
 
@@ -67,6 +68,17 @@ def _analyse_negotiation(trace):
     offered = set(negotiation.get("offered") or [])
     unavailable = set(negotiation.get("unavailable") or [])
 
+    # Nothing offered at all means ALPN never ran, so no gap was measured.
+    # negotiate.choose() returns offered: [] exactly once -- on a non-https
+    # run, where its own `signal` says "no TLS — ALPN does not apply" one
+    # field away in this same section. Without this guard every advertised
+    # protocol counted as a gap, and a --no-tls run of any Cloudflare- or
+    # Fastly-fronted host (alpn="h3,h2") published "this host advertises
+    # h3, h2, http/1.1, which this tool does not speak" -- false about this
+    # build's own capabilities, and contradicted by the signal beside it.
+    if not offered:
+        return
+
     # A protocol the host advertises that we never put on the wire. Anything we
     # offered is not a gap, whether or not the server picked it.
     gaps = [p for p in advertised if p not in offered]
@@ -74,7 +86,14 @@ def _analyse_negotiation(trace):
         return
 
     missing_lib = [p for p in gaps if p in unavailable]
-    unsupported = [p for p in gaps if p not in unavailable]
+    # "does not speak" is a claim about this build, so it may never name a
+    # protocol this build ships a transport module for, whatever the reason
+    # that protocol went unoffered on this particular run. TRANSPORTS is the
+    # one authority on what can be framed; anything in it that still ended up
+    # a gap is a fact about this run, not about the tool, and stays silent
+    # rather than being reported under the wrong sentence.
+    unsupported = [p for p in gaps
+                   if p not in unavailable and p not in TRANSPORTS]
 
     # chosen is unmeasured (None) whenever the handshake never reported a
     # negotiated protocol -- a plain http:// run, or TLS not observed. The

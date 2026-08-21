@@ -1384,8 +1384,24 @@
       bind: function () {
         var s = traceSection("http");
         if (!s) return [];
-        return [["Negotiated protocol", fact((s.final || {}).protocol, "measured")],
-                ["Requested URL", fact((s.final || {}).url, "measured")]];
+        var f = s.final || {};
+        // "Protocol used", not "Negotiated protocol": final.protocol is the
+        // protocol the FINAL response was served over, which is not what ALPN
+        // selected. The TLS Handshake step above now carries the real
+        // "Negotiated" row (negotiation.chosen). Two rows both called
+        // Negotiated, both badged measured, flatly contradicted each other on
+        // any chain whose origin negotiated h2 and then redirected to an
+        // http:// URL, where this tool falls back to the HTTP/1.1 transport
+        // for the cleartext hop.
+        var rows = [["Protocol used", fact(f.protocol, "measured")],
+                    ["Requested URL", fact(f.url, "measured")]];
+        // HTTP/2 only -- HTTP/1.1 has no streams to number, so an absent
+        // stream_id on an h1 trace is the correct reading, not a gap.
+        if (f.stream_id != null) {
+          rows.push(["Stream", fact("stream " + f.stream_id +
+            " — this request's own stream on the shared connection", "measured")]);
+        }
+        return rows;
       },
       testYourself: function () {
         return "curl -sSv --http2 https://" + host() + "/ -o /dev/null 2>&1 | grep -i 'ALPN\\|HTTP/'";

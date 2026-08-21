@@ -1,5 +1,7 @@
 import io
+import re
 
+import pytest
 from rich.console import Console
 
 from wj import render, schema
@@ -11,6 +13,13 @@ def capture(fn, trace, width=110):
     console = Console(file=buffer, width=width, force_terminal=False, no_color=True)
     fn(console, trace)
     return buffer.getvalue()
+
+
+def _unwrapped(out):
+    """Panel borders stripped and every run of whitespace collapsed to one
+    space, so an assertion about a phrase does not silently depend on where
+    Rich happened to wrap the line inside a fixed-width panel."""
+    return re.sub(r"\s+", " ", re.sub(r"[│╭╮╰╯─┃]", " ", out))
 
 
 def test_render_trace_mentions_every_layer():
@@ -175,30 +184,61 @@ def test_render_http_says_truncated_when_redirect_limit_reached():
     assert "truncated" in out.lower()
 
 
-def test_render_http_marks_the_final_response_as_reused_when_it_was():
-    # Important, post-C7: final.connection_reused is measured (the canonical
-    # single-redirect h2 case has it True while the hop itself is False --
-    # see wj/schema.py's L5 derivation) but was rendered nowhere. The hop row
-    # already gets a "reused connection" marker when True; the final
-    # response needs the same, on the same three-state basis.
+@pytest.mark.parametrize("value, expected, forbidden", [
+    (True, "reused the earlier connection", "opened fresh"),
+    (False, "opened fresh", "reused the earlier connection"),
+    (None, "connection reuse not reported", "opened fresh"),
+])
+def test_render_http_reads_all_three_connection_reuse_states_on_the_final_response(
+        value, expected, forbidden):
+    # webpage-journey.html distinguishes true / false / not-reported for this
+    # exact field (its "Connection" row). The terminal collapsed False and None
+    # into the same silence -- `if final.get("connection_reused"):` -- so one
+    # renderer said strictly less than the other about the same measurement.
+    # Two renderers of one field must not implement two contracts.
+    trace = full_trace()
+    trace["http"]["hops"] = []
+    if value is None:
+        trace["http"]["final"].pop("connection_reused", None)
+    else:
+        trace["http"]["final"]["connection_reused"] = value
+    out = _unwrapped(capture(render.render_http, trace))
+    assert expected in out
+    assert forbidden not in out
+
+
+def _hop_row(trace):
+    """Just the redirect-hop row, cut out of the panel before the Status row --
+    the final response reports its own reuse state in the same panel, so an
+    assertion over the whole output cannot tell the two apart."""
+    return _unwrapped(capture(render.render_http, trace)).split("Status")[0]
+
+
+@pytest.mark.parametrize("value, expected", [
+    (True, "reused the same connection"),
+    (None, "connection reuse not reported"),
+])
+def test_render_http_reads_the_reuse_state_of_each_redirect_hop(value, expected):
+    # The page's per-hop reading, mirrored: True is marked, None says plainly
+    # that it was not reported, and a measured False stays silent (a measured
+    # negative earns no marker anywhere else in either renderer either).
+    trace = full_trace()
+    hop = {"status": 301, "url": "https://example.com/",
+           "location": "https://example.com/next"}
+    if value is not None:
+        hop["connection_reused"] = value
+    trace["http"]["hops"] = [hop]
+    assert expected in _hop_row(trace)
+
+
+def test_render_http_says_nothing_about_reuse_for_a_hop_measured_as_fresh():
     trace = full_trace()
     trace["http"]["hops"] = [{"status": 301, "url": "https://example.com/",
                               "location": "https://example.com/next",
                               "connection_reused": False}]
-    trace["http"]["final"]["connection_reused"] = True
-    out = capture(render.render_http, trace)
-    assert "reused connection" in out
-
-
-def test_render_http_does_not_mark_the_final_response_reused_when_false_or_absent():
-    trace = full_trace()
-    trace["http"]["final"]["connection_reused"] = False
-    out = capture(render.render_http, trace)
-    assert "reused connection" not in out
-
-    trace2 = full_trace()
-    out2 = capture(render.render_http, trace2)   # connection_reused absent entirely
-    assert "reused connection" not in out2
+    row = _hop_row(trace)
+    assert "reused the same connection" not in row
+    assert "connection reuse not reported" not in row
 
 
 def test_render_http_shows_every_request_and_response_header():
@@ -477,3 +517,106 @@ def test_negotiation_line_is_silent_when_the_section_is_unobserved():
     trace["negotiation"] = {"observed": False, "why_not": "skipped because dns was not observed"}
     out = capture(render.render_negotiation_line, trace)
     assert "not observed" in out
+
+
+# ---------------------------------------------------------------------------
+# I3 / M7: the retired ALPN claim, and host-controlled strings reaching Rich
+# markup. Both renderers of the ALPN facts are covered here.
+# ---------------------------------------------------------------------------
+
+def test_render_dns_does_not_claim_alpn_is_deliberately_not_what_we_negotiated():
+    # Guarded the way tests/test_cli.py guards the --help copy. This claim was
+    # corrected in webpage-journey.html, wj/cli.py and README.md and missed
+    # here, leaving the repo's last surviving copy. "Deliberately" makes it a
+    # claim about this tool's DESIGN, which this branch falsified: the TLS
+    # handshake panel now reports what ALPN actually selected.
+    trace = full_trace()
+    trace["dns"]["records"]["HTTPS"] = [{"data": '1 . alpn="h2"', "ttl": 300}]
+    trace["dns"]["alpn_advertised"] = ["h2"]
+    out = _unwrapped(capture(render.render_dns, trace))
+
+    assert "deliberately not what this tool negotiated" not in out
+    # Mirrors the page's own wording for this row.
+    assert "what the host says it supports" in out
+    assert "see Negotiated in the TLS handshake panel" in out
+
+
+def test_render_dns_shows_an_alpn_token_literally_instead_of_parsing_it_as_markup():
+    # advertised comes off the TARGET's own DNS HTTPS record. Interpolated
+    # into a markup f-string, a token like this printed as
+    # "h2 (verified safe)" -- the displayed token was not the measured one.
+    trace = full_trace()
+    trace["dns"]["records"]["HTTPS"] = [{"data": "1 .", "ttl": 300}]
+    trace["dns"]["alpn_advertised"] = ["[/dim]h2 (verified safe)[dim]"]
+    out = _unwrapped(capture(render.render_dns, trace))
+    assert "[/dim]h2 (verified safe)[dim]" in out
+
+
+def test_render_dns_survives_a_malformed_markup_tag_in_an_alpn_token():
+    # An unclosed/unknown tag raised MarkupError, uncaught, aborting the whole
+    # render after a trace that had already succeeded.
+    trace = full_trace()
+    trace["dns"]["records"]["HTTPS"] = [{"data": "1 .", "ttl": 300}]
+    trace["dns"]["alpn_advertised"] = ["[/foo]"]
+    out = _unwrapped(capture(render.render_dns, trace))
+    assert "[/foo]" in out
+
+
+def test_render_negotiation_line_shows_host_strings_literally():
+    trace = full_trace()
+    trace["negotiation"] = {"observed": True,
+                            "advertised": ["[/dim]h2 (verified safe)[dim]"],
+                            "offered": ["http/1.1"], "unavailable": [],
+                            "signal": "HTTPS record", "chosen": "[blink]evil",
+                            "attempted": []}
+    out = _unwrapped(capture(render.render_negotiation_line, trace))
+    assert "[/dim]h2 (verified safe)[dim]" in out
+    assert "chose [blink]evil" in out
+
+
+def test_render_negotiation_line_survives_a_malformed_markup_tag():
+    trace = full_trace()
+    trace["negotiation"] = {"observed": True, "advertised": ["[/foo]"],
+                            "offered": ["http/1.1"], "unavailable": [],
+                            "signal": "HTTPS record", "chosen": None,
+                            "attempted": []}
+    out = _unwrapped(capture(render.render_negotiation_line, trace))
+    assert "[/foo]" in out
+
+
+def test_render_negotiation_line_shows_a_why_not_literally():
+    # why_not is free text -- wj/run.py renders any collector exception into it.
+    trace = full_trace()
+    trace["negotiation"] = {"observed": False,
+                            "why_not": "OSError: [/dim]host down[dim] on eth0"}
+    out = _unwrapped(capture(render.render_negotiation_line, trace))
+    assert "OSError: [/dim]host down[dim] on eth0" in out
+
+
+def test_render_http_shows_a_server_protocol_string_literally():
+    # final.protocol is read straight off the server's status line (h1) or its
+    # :status frame (h2) -- host-controlled, on its way into a coloured
+    # markup f-string.
+    trace = full_trace()
+    trace["http"]["final"]["protocol"] = "[/bold]HTTP/9 (secure)"
+    out = _unwrapped(capture(render.render_http, trace))
+    assert "[/bold]HTTP/9 (secure)" in out
+
+
+# ---------------------------------------------------------------------------
+# I6: stream_id is measured on every HTTP/2 response and must reach a reader.
+# ---------------------------------------------------------------------------
+
+def test_render_http_shows_the_stream_id_when_one_was_measured():
+    trace = full_trace()
+    trace["http"]["final"]["stream_id"] = 5
+    out = _unwrapped(capture(render.render_http, trace))
+    assert "stream 5" in out
+
+
+def test_render_http_shows_no_stream_row_on_an_http1_trace():
+    # HTTP/1.1 has no streams to number: the row is absent, not zero.
+    trace = full_trace()
+    trace["http"]["final"].pop("stream_id", None)
+    out = _unwrapped(capture(render.render_http, trace))
+    assert "stream" not in out.lower()

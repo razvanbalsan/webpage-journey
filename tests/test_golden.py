@@ -4,10 +4,13 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import make_golden
+from tests.test_transport_h2 import FakeTLSSocket
 from wj import capabilities, redact, schema
+from wj.collect import http as http_collect
 from wj.collect import negotiate
 from wj.collect.http import decode_body
 from wj.collect.tls import caa_allows
+from wj.context import Context
 from wj.run import orchestrate
 
 GOLDEN = Path(__file__).parent / "fixtures" / "golden"
@@ -109,11 +112,15 @@ def test_fixture_decoded_body_agrees_with_the_real_function(name):
 def _fresh_trace(name):
     """Build the trace tests/fixtures/make_golden.py would write for `name`,
     without touching disk. make_golden.specs() is the single recipe both
-    __main__ there and this test build from, so they cannot drift apart."""
+    __main__ there and this test build from, so they cannot drift apart.
+
+    Routed through make_golden.as_written() so the comparison is against what
+    the generator actually serialises -- the real transports produce tuples
+    for header pairs, which JSON writes as arrays."""
     ctx, collectors_map = make_golden.specs()[name]
     trace = orchestrate(ctx, collectors=collectors_map)
     trace["generated_at"] = make_golden.GENERATED_AT
-    return trace
+    return make_golden.as_written(trace)
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -131,8 +138,74 @@ def test_golden_fixture_matches_a_fresh_generator_run(name):
 
 def test_redacted_golden_fixture_matches_a_fresh_generator_run():
     committed = json.loads((GOLDEN / "cdn-host-redacted.json").read_text())
-    fresh = redact.redact_trace(_fresh_trace("cdn-host.json"))
+    fresh = make_golden.as_written(redact.redact_trace(_fresh_trace("cdn-host.json")))
     assert fresh == committed
+
+
+def _collect_final_keys():
+    """The exact key set wj/collect/http.py's collect() produces for
+    http.final, measured by running the REAL collector over the REAL HTTP/2
+    transport against tests/test_transport_h2.py's FakeTLSSocket."""
+    caps = capabilities.Capabilities(libs={"h2": True}, tools={},
+                                     privileged=False, can_sudo=False)
+    ctx = Context(host="h2.example.net", scheme="https", port=443, path="/",
+                  timeout=5.0, deadline=1e9, caps=caps, results={})
+    ctx.results["tls"] = {
+        "observed": True, "alpn": "h2",
+        "_socket": FakeTLSSocket([(":status", "200"),
+                                  ("content-type", "text/html")])}
+    section = http_collect.collect(ctx)
+    assert section["observed"] is True, section
+    return set(section["final"])
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_golden_final_has_exactly_the_keys_collect_produces(name):
+    # The fixture/collector drift this suite could not previously see:
+    # make_golden.py's http stubs hand-write final{...} rather than going
+    # through collect(), so a key collect() always produces could simply be
+    # missing from every golden. final.request was, which meant the terminal's
+    # request panel (wj/render.py) rendered nothing against any fixture --
+    # including the h2 one, whose :method/:path/:scheme/:authority block is
+    # the most instructive thing about an HTTP/2 request.
+    #
+    # Every other test here checks PROPERTIES of the fixture, all of which a
+    # document collect() could never produce can satisfy perfectly. This is
+    # the one that says the fixture is that document's actual shape.
+    trace = json.loads((GOLDEN / name).read_text())
+    http = trace["http"]
+    if not http["observed"]:
+        pytest.skip("http not observed in this fixture")
+    assert set(http["final"]) == _collect_final_keys()
+
+
+def test_h2_golden_carries_the_request_block_the_real_transport_sends():
+    # I6/M11 together: the h2 fixture must show the pseudo-header shape, and
+    # it must be the transport's own, not a hand-written imitation of it.
+    trace = json.loads((GOLDEN / "h2-host.json").read_text())
+    final = trace["http"]["final"]
+    ctx, _ = make_golden.specs()["h2-host.json"]
+    real = make_golden.real_h2_exchange(ctx, final["url"], final["status"],
+                                        final["headers"])["request"]
+    assert make_golden.as_written(real) == final["request"]
+    names = [k for k, _ in final["request"]["headers"]]
+    assert names[:4] == [":method", ":path", ":scheme", ":authority"]
+
+
+def test_h2_golden_records_a_stream_id_on_the_final_response():
+    # stream_id was measured by the transport on every response and then
+    # dropped on the way into final{...}, so a redirect-free HTTP/2 trace
+    # carried no stream id anywhere in the document.
+    trace = json.loads((GOLDEN / "h2-host.json").read_text())
+    assert trace["http"]["final"]["stream_id"] == 5
+
+
+@pytest.mark.parametrize("name", ["cdn-host.json", "plain-host.json",
+                                  "partial-unprivileged.json"])
+def test_http1_goldens_leave_stream_id_absent(name):
+    # HTTP/1.1 has no streams to number: unmeasured, not zero.
+    trace = json.loads((GOLDEN / name).read_text())
+    assert trace["http"]["final"]["stream_id"] is None
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -189,3 +262,13 @@ def test_h2_fixture_header_bytes_agrees_with_the_real_transport():
     ctx, _ = make_golden.specs()["h2-host.json"]
     real = make_golden.real_h2_header_bytes(ctx, final["status"], final["headers"])
     assert real == final["header_bytes"]
+
+
+def test_the_generator_does_not_claim_every_request_is_literal_http1_text():
+    # A prose claim this branch falsified, guarded the way tests/test_cli.py
+    # guards the --help copy: since h2 landed, a handshake that selects h2
+    # frames its request in binary HPACK, not as literal HTTP/1.1 text over
+    # the socket. Prose claims are bound by this project's one rule exactly
+    # as strictly as fields are.
+    source = Path(make_golden.__file__).read_text()
+    assert "Requests always go out as literal HTTP/1.1 text" not in source

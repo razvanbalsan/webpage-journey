@@ -201,3 +201,85 @@ def test_unobserved_sections_are_skipped_silently():
     trace = base_trace()
     findings.analyse(trace)
     assert trace["notes"] == []
+
+
+# ---------------------------------------------------------------------------
+# C1: a --no-tls run must not publish a note that is false about this tool's
+# own capabilities. negotiate.choose() returns offered: [] on any non-https
+# run, which made every advertised protocol look like a gap.
+# ---------------------------------------------------------------------------
+
+def _no_tls_trace(advertised):
+    """A --no-tls run against a host with an HTTPS record, built by calling
+    the REAL negotiate.choose() rather than hand-writing its output -- the
+    whole finding is that choose()'s honest empty offer was being misread."""
+    from wj import capabilities
+    from wj.collect import negotiate
+
+    caps = capabilities.Capabilities(libs={"h2": True}, tools={},
+                                     privileged=False, can_sudo=False)
+    decision = negotiate.choose(advertised, caps, "http")
+    trace = base_trace()
+    trace["negotiation"] = schema.observed(chosen=None, attempted=[], **decision)
+    return trace
+
+
+def test_a_no_tls_run_publishes_no_protocol_gap_note_at_all():
+    # Probed on this branch: a --no-tls run of any Cloudflare- or Fastly-
+    # fronted host (alpn="h3,h2") published "this host advertises h3, h2,
+    # http/1.1, which this tool does not speak" -- false about h2 (this
+    # branch's entire point) and about http/1.1, and contradicted by the
+    # `signal` field one line away in the same section. Nothing was offered
+    # because ALPN does not apply without TLS, so no gap was measured.
+    trace = _no_tls_trace(["h3", "h2", "http/1.1"])
+    assert trace["negotiation"]["offered"] == []
+    assert trace["negotiation"]["signal"] == "no TLS — ALPN does not apply"
+
+    findings.analyse(trace)
+    assert [n for n in trace["notes"] if n["section"] == "negotiation"] == []
+
+
+def test_a_no_tls_run_never_claims_the_tool_cannot_speak_h2_or_http11():
+    trace = _no_tls_trace(["h3", "h2", "http/1.1"])
+    findings.analyse(trace)
+    joined = " ".join(texts(trace))
+    assert "does not speak" not in joined
+    assert "h2" not in joined
+    assert "http/1.1" not in joined
+
+
+def test_unsupported_never_names_a_protocol_this_build_has_a_transport_for():
+    # "does not speak" is a claim about this BUILD, so TRANSPORTS is its only
+    # authority. A gap in a protocol we ship a transport for is a fact about
+    # this run, not about the tool, and must not be reported under that
+    # sentence however it arises.
+    from wj.transport import TRANSPORTS
+
+    trace = base_trace()
+    trace["negotiation"] = {"observed": True,
+                            "advertised": ["h3", "h2"],
+                            "offered": ["http/1.1"],
+                            "unavailable": [],
+                            "chosen": "http/1.1", "attempted": []}
+    findings.analyse(trace)
+    notes = " ".join(texts(trace))
+    assert "h3" in notes and "does not speak" in notes
+    for protocol in TRANSPORTS:
+        assert f"advertises {protocol}" not in notes
+        assert f", {protocol}," not in notes
+
+
+def test_the_missing_library_note_still_fires_for_an_advertised_h2():
+    # The TRANSPORTS exclusion above must not silence the note that IS true:
+    # h2 has a transport module, but this build cannot load its library.
+    from wj import capabilities
+    from wj.collect import negotiate
+
+    caps = capabilities.Capabilities(libs={"h2": False}, tools={},
+                                     privileged=False, can_sudo=False)
+    decision = negotiate.choose(["h2"], caps, "https")
+    trace = base_trace()
+    trace["negotiation"] = schema.observed(chosen="http/1.1", attempted=[], **decision)
+    findings.analyse(trace)
+    assert any("the library needed to speak it is not installed" in t
+               for t in texts(trace))

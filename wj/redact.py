@@ -59,10 +59,16 @@ def _scrub_embedded_identifiers(text):
     """Replace any MAC address or IPv4/IPv6 address embedded in a string
     with REDACTED, leaving the rest of the text intact.
 
-    Used on negotiation.signal below. wj/collect/negotiate.py's choose()
-    only ever produces a handful of fixed strings, none of which embed an
-    identifier -- this is a defensive backstop for a future signal string
-    that does, not a fix for a value seen today.
+    Applied below to every free-text field a trace document carries: each
+    section's why_not, every note's text, and negotiation.signal.
+
+    why_not is the one that carries genuinely uncontrolled text --
+    wj/run.py turns ANY collector exception into f"{type(exc).__name__}:
+    {exc}", so whatever an OSError, a resolver, or a socket puts in its
+    message goes straight into the document. notes[].text is assembled by
+    wj/findings.py from section values. negotiation.signal is the
+    defensive case: choose() only ever produces a handful of fixed
+    strings, none of which embed an identifier today.
 
     Unlike _identifies_operator() above, this does not spare globally
     routable addresses. That distinction is right for a field like
@@ -135,6 +141,23 @@ def redact_trace(trace):
     negotiation = out.get("negotiation", {})
     if negotiation.get("observed") and negotiation.get("signal"):
         negotiation["signal"] = _scrub_embedded_identifiers(negotiation["signal"])
+
+    # Free text, on the UNOBSERVED path. wj/run.py renders any collector
+    # exception as f"{type(exc).__name__}: {exc}" -- arbitrary text, from a
+    # socket error or a resolver, straight into the exported document. This
+    # ran unscrubbed while the one field that provably cannot embed an
+    # identifier (negotiation.signal, above) was the only one scrubbed at
+    # all.
+    for name in schema.SECTIONS:
+        section = out.get(name)
+        if isinstance(section, dict) and section.get("why_not"):
+            section["why_not"] = _scrub_embedded_identifiers(section["why_not"])
+
+    # Free text again: wj/findings.py builds every note from section values,
+    # and a note is copied verbatim into the export and onto the page.
+    for note in out.get("notes") or []:
+        if isinstance(note, dict) and note.get("text"):
+            note["text"] = _scrub_embedded_identifiers(note["text"])
 
     # The OSI narrative is assembled from the same local/tcp/dns/path facts
     # above, but as free-text strings baked in at orchestration time — before

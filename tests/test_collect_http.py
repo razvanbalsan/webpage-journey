@@ -295,7 +295,37 @@ def test_request_bytes_round_trips_through_parse_response_shape():
     assert b"Host: example.com\r\n" in raw
 
 
-def test_collect_records_the_request_that_was_sent():
+def test_collect_records_the_request_the_real_h1_transport_actually_sent():
+    # Driven through the REAL h1 transport, not an injected stub: the point of
+    # final.request is that it is what went on the wire, so a stub that returns
+    # a "request" of its own choosing would prove nothing about the collector.
+    from wj import capabilities
+    from wj.context import Context
+
+    caps = capabilities.Capabilities(libs={}, tools={}, privileged=False, can_sudo=False)
+    ctx = Context(host="example.com", scheme="https", port=443, path="/",
+                  timeout=5.0, deadline=1e9, caps=caps, results={})
+    sock = FakeH1Socket([RAW_200 + b"hi"])
+    ctx.results["tls"] = {"observed": True, "_socket": sock}
+
+    section = http_collect.collect(ctx)
+    request = section["final"]["request"]
+    assert request["method"] == "GET"
+    assert request["http_version"] == "HTTP/1.1"
+    assert ("Host", "example.com") in request["headers"]
+    assert any(k == "User-Agent" for k, _ in request["headers"])
+    # What was recorded is what the socket actually received.
+    assert sock.sent.startswith(
+        f"{request['method']} {request['target']} {request['http_version']}".encode())
+
+
+def test_collect_does_not_fabricate_a_request_no_transport_reported():
+    # The removed `response.get("request") or h1.build_request(fetched_url)`
+    # fallback could only ever publish an HTTP/1.1 request that was never sent
+    # -- on an h2 trace it would have invented a wire format the connection
+    # does not even speak. Both transports always set "request"; if one ever
+    # stops, the field must go absent, not get filled in with a plausible
+    # reconstruction.
     from wj import capabilities
     from wj.context import Context
 
@@ -304,18 +334,35 @@ def test_collect_records_the_request_that_was_sent():
                   timeout=5.0, deadline=1e9, caps=caps, results={})
     ctx.results["tls"] = {"observed": True, "_socket": object()}
 
-    # An injected fetch (as in these tests) returns no "request" key -- collect
-    # must reconstruct the request it describes from the final fetched URL.
     def fetch(url, sock):
         return {"protocol": "HTTP/1.1", "status": 200, "reason": "OK",
                 "headers": [("Content-Type", "text/html")], "body": b"hi",
                 "ttfb_ms": 1.0, "total_ms": 2.0, "wire_bytes": 2}
 
     section = http_collect.collect(ctx, fetch=fetch)
-    request = section["final"]["request"]
-    assert request["method"] == "GET"
-    assert ("Host", "example.com") in request["headers"]
-    assert any(k == "User-Agent" for k, _ in request["headers"])
+    assert section["final"]["request"] is None
+
+
+def test_both_transports_always_report_the_request_they_sent():
+    # The premise the deleted fallback rested on, checked directly rather than
+    # assumed: neither transport can leave "request" unset, so the collector
+    # never has a real occasion to reconstruct one.
+    from wj import capabilities
+    from wj.context import Context
+
+    caps = capabilities.Capabilities(libs={"h2": True}, tools={},
+                                     privileged=False, can_sudo=False)
+    ctx = Context(host="example.com", scheme="https", port=443, path="/",
+                  timeout=5.0, deadline=1e9, caps=caps, results={})
+
+    h1_response = h1.fetcher(ctx)("https://example.com/",
+                                  FakeH1Socket([RAW_200 + b"hi"]))
+    assert h1_response["request"]["http_version"] == "HTTP/1.1"
+
+    h2_sock = FakeTLSSocket([(":status", "200"), ("content-type", "text/html")])
+    h2_response = h2_transport.fetcher(ctx)("https://example.com/", h2_sock)
+    assert h2_response["request"]["http_version"] == "HTTP/2"
+    assert (":authority", "example.com") in h2_response["request"]["headers"]
 
 
 def test_collect_reports_content_type_as_absent_not_empty_string():
@@ -566,6 +613,9 @@ def test_an_alpn_protocol_with_no_transport_module_names_it_not_a_timeout():
     # report chosen: "http/1.1" -- a protocol nobody chose.
     ctx = make_ctx()
     ctx.results["tls"] = {"observed": True, "alpn": "h3", "_socket": object()}
+    ctx.results["negotiation"] = {"observed": True, "advertised": ["h3"],
+                                  "offered": ["h2", "http/1.1"], "unavailable": [],
+                                  "chosen": None, "attempted": []}
 
     section = http_collect.collect(ctx, fetch=lambda url, sock: pytest.fail(
         "must not attempt a request over a protocol this build has no transport for"))
@@ -573,6 +623,14 @@ def test_an_alpn_protocol_with_no_transport_module_names_it_not_a_timeout():
     assert section["observed"] is False
     assert "h3" in section["why_not"]
     assert "timeout" not in section["why_not"]
+
+    # The handshake MEASURED this selection; the missing transport is a
+    # separate, later fact. Discarded here, the page printed "Negotiated:
+    # nothing (ALPN selected no protocol)" three rows under its own measured
+    # "ALPN: h3" -- a false negative wearing a measured badge, not a gap.
+    # (Reachable in the wild: OpenSSL does not enforce that the server's
+    # selected ALPN token came from the client's list.)
+    assert ctx.results["negotiation"]["chosen"] == "h3"
 
 
 def test_negotiation_chosen_stays_none_for_plain_http():

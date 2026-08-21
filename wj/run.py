@@ -27,9 +27,16 @@ COLLECTORS = {
     "path": path_collect.collect,
 }
 
-# section -> the section it needs to have observed before it can run
-DEPENDS_ON = {"negotiation": "dns", "tcp": "dns", "tls": "tcp",
-              "http": "tcp", "path": "tcp"}
+# section -> the section it needs to have observed before it can run.
+#
+# "negotiation" is deliberately NOT listed. wj/collect/negotiate.py's collect()
+# carries its own dns guard, and gating it here too left two divergent messages
+# for one condition, the collector's -- which quotes dns's own why_not, so the
+# reader learns WHY it did not resolve -- permanently unreachable. The collector
+# is pure (no I/O, no socket), so there is nothing this gate was protecting it
+# from; every other entry here guards a collector that would otherwise reach for
+# a socket that does not exist.
+DEPENDS_ON = {"tcp": "dns", "tls": "tcp", "http": "tcp", "path": "tcp"}
 
 
 def _run_one(name, collector, ctx, now):

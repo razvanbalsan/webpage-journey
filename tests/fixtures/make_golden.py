@@ -9,26 +9,35 @@ from wj.collect import negotiate as negotiate_collect
 from wj.collect import tls as tls_collect
 from wj.context import Context
 from wj.run import orchestrate
+from wj.transport import h1 as h1_transport
 from wj.transport import h2 as h2_transport
 
 OUT = Path(__file__).parent / "golden"
 
 
-def real_h2_header_bytes(ctx, status, headers):
-    """The real HPACK wire cost of `headers`, measured by driving the real
-    HTTP/2 transport (wj.transport.h2.fetcher) against a real, server-side
+def real_h2_exchange(ctx, url, status, headers):
+    """One real HTTP/2 request/response, driven through the real transport
+    (wj.transport.h2.fetcher) against a real, server-side
     h2.connection.H2Connection -- tests/test_transport_h2.py's FakeTLSSocket,
     the same harness that transport's own tests use to encode real HEADERS
-    frames. No hand-picked number: an earlier draft of h2-host.json guessed
-    a wire figure that turned out to be smaller than any standard HPACK
-    encoder can produce for these headers, which is exactly the kind of
-    drift this function exists to make impossible -- it cannot be wrong
-    about what the real encoder emits, because it IS the real encoder.
+    frames. Deterministic, and no network.
+
+    Every h2-shaped value the h2 fixture publishes comes from here rather
+    than from a hand-written literal: the HPACK wire cost (an earlier draft
+    of h2-host.json guessed a wire figure smaller than any standard HPACK
+    encoder can produce for these headers) and the request's own
+    :method/:path/:scheme/:authority pseudo-header block, which no hand-
+    written dict could be trusted to reproduce.
     """
     response_headers = [(":status", str(status))] + [(k, v) for k, v in headers]
     sock = FakeTLSSocket(response_headers)
-    response = h2_transport.fetcher(ctx)(f"https://{ctx.host}/", sock)
-    return response["header_bytes"]
+    return h2_transport.fetcher(ctx)(url, sock)
+
+
+def real_h2_header_bytes(ctx, status, headers):
+    """The real HPACK wire cost of `headers`. The request URL does not enter
+    this measurement -- header_bytes describes the RESPONSE header block."""
+    return real_h2_exchange(ctx, f"https://{ctx.host}/", status, headers)["header_bytes"]
 
 
 def ctx_for(host, tools):
@@ -132,9 +141,14 @@ def collectors(cdn=True, with_path=True, with_local=True):
             resumption={"tested": False}, legacy_versions_accepted=[])
 
     def http(ctx):
-        # Requests always go out as literal HTTP/1.1 text over the socket
-        # (wj/collect/http.py), so the response's own protocol string is always
-        # "HTTP/1.1" — a CDN in front of the origin doesn't change that.
+        # This fixture's handshake lands on http/1.1 (see tls() above), so its
+        # requests go out as literal HTTP/1.1 text over the socket
+        # (wj/transport/h1.py) and the response's own protocol string is
+        # "HTTP/1.1" — a CDN in front of the origin doesn't change that. That
+        # is a fact about THIS fixture, not about the tool: since h2 landed,
+        # a handshake that selects h2 frames its request in binary HPACK
+        # instead (see h2_collectors() below, whose request block comes from
+        # the real transport rather than from build_request()).
 
         # Mirrors wj/collect/http.py's own wiring: chosen is filled from the
         # handshake's ALPN result, not asserted independently -- I1 found
@@ -184,9 +198,24 @@ def collectors(cdn=True, with_path=True, with_local=True):
                    "headers": [["content-type", "text/html; charset=utf-8"],
                                ["content-encoding", "gzip"],
                                ["cache-control", "max-age=300"]],
+                   # collect() records the request it actually sent on the final
+                   # hop, and the terminal's request panel (wj/render.py) renders
+                   # nothing without it. Built by calling the real
+                   # h1.build_request() for this fixture's own final URL, never
+                   # hand-written, so it cannot drift from what h1 puts on the
+                   # wire.
+                   "request": h1_transport.build_request(f"https://{ctx.host}/"),
                    "ttfb_ms": 88.0, "total_ms": 109.0, "wire_bytes": 14000,
                    "decoded_bytes": 61000, "encoding": "gzip", "ratio": 4.36,
-                   "content_type": "text/html", "connection_reused": False},
+                   "content_type": "text/html",
+                   # HTTP/1.1 measures neither of these: wj/transport/h1.py
+                   # sets no header_bytes (there is no HPACK to measure) and no
+                   # stream_id (there are no streams to number). Absent here is
+                   # the measured truth, not a gap -- and collect() emits both
+                   # keys unconditionally, so a fixture that omitted them was a
+                   # document collect() could not produce.
+                   "header_bytes": None, "stream_id": None,
+                   "connection_reused": False},
             cache={"state": "HIT", "age": 412, "header": "cf-cache-status",
                    "directives": "max-age=300"} if cdn else
                   {"state": None, "age": None, "header": None, "directives": "max-age=300"},
@@ -316,12 +345,17 @@ def h2_collectors():
         final_headers = [["content-type", "text/html; charset=utf-8"],
                          ["content-encoding", "gzip"],
                          ["cache-control", "max-age=600"]]
-        # Both wire and decoded come from real_h2_header_bytes() actually
-        # driving the real transport (see its docstring above) against these
-        # same headers, the same discipline as tls()'s caa_match above --
-        # neither is hand-derived, so this fixture cannot drift from what
-        # HPACK genuinely does to this header set.
-        header_bytes = real_h2_header_bytes(ctx, 200, final_headers)
+        # Both the header_bytes figures and the request's own pseudo-header
+        # block come from real_h2_exchange() actually driving the real
+        # transport (see its docstring above) for this fixture's own final
+        # URL and headers -- the same discipline as tls()'s caa_match above.
+        # Nothing here is hand-derived, so the fixture cannot drift from what
+        # HPACK genuinely does to this header set, nor from the
+        # :method/:path/:scheme/:authority shape wj/transport/h2.py actually
+        # sends.
+        exchange = real_h2_exchange(ctx, f"https://{ctx.host}/en/index.html",
+                                    200, final_headers)
+        header_bytes = exchange["header_bytes"]
 
         # Two same-origin redirects, all over one HTTP/2 connection: the
         # first request opens it (connection_reused: False -- it is the TLS
@@ -331,7 +365,9 @@ def h2_collectors():
         # never report True, since every h1 hop sends Connection: close).
         # Stream ids are client-initiated and odd, incrementing by 2 per
         # request on the connection (RFC 7540 §5.1.1), matching
-        # h2.connection.H2Connection.get_next_available_stream_id().
+        # h2.connection.H2Connection.get_next_available_stream_id() -- so the
+        # two redirect hops ran on streams 1 and 3 and the final response on
+        # stream 5.
         return schema.observed(
             hops=[{"url": f"https://{ctx.host}/", "status": 301,
                    "location": f"https://{ctx.host}/en/", "protocol": "HTTP/2",
@@ -342,10 +378,16 @@ def h2_collectors():
             redirect_limit_reached=False,
             final={"url": f"https://{ctx.host}/en/index.html", "status": 200, "reason": None,
                    "protocol": "HTTP/2", "headers": final_headers,
+                   # The real transport's own request block for this URL --
+                   # the :method/:path/:scheme/:authority shape that is the
+                   # most instructive thing about an HTTP/2 request, and the
+                   # reason the terminal's request panel exists at all.
+                   "request": exchange["request"],
                    "ttfb_ms": 10.5, "total_ms": 26.0, "wire_bytes": 9800,
                    "decoded_bytes": 41160, "encoding": "gzip", "ratio": 4.2,
                    "content_type": "text/html",
                    "header_bytes": header_bytes,
+                   "stream_id": 5,
                    "connection_reused": True},
             cache={"state": None, "age": None, "header": None, "directives": "max-age=600"},
             cdn=None,
@@ -390,6 +432,18 @@ def specs():
                                       collectors(with_path=False, with_local=False)),
         "h2-host.json": (ctx_for("h2.example.net", TOOLS), h2_collectors()),
     }
+
+
+def as_written(trace):
+    """The document exactly as write() below puts it on disk.
+
+    json.dumps turns tuples into arrays, and the real transports genuinely
+    produce tuples (h1.build_request's header pairs, h2's pseudo-header list),
+    so an in-memory trace and its own committed golden differ in Python type
+    while being the same document. Comparing through this compares what is
+    actually committed rather than an artefact of the serialiser.
+    """
+    return json.loads(json.dumps(trace, indent=2, default=str))
 
 
 def write(name, ctx, collectors_map):

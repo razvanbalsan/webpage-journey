@@ -362,6 +362,33 @@
           "max-age=300"
         ]
       ],
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "http_version": "HTTP/1.1",
+        "headers": [
+          [
+            "Host",
+            "example.com"
+          ],
+          [
+            "User-Agent",
+            "webpage-journey/2.0"
+          ],
+          [
+            "Accept-Encoding",
+            "gzip, deflate"
+          ],
+          [
+            "Accept",
+            "*/*"
+          ],
+          [
+            "Connection",
+            "close"
+          ]
+        ]
+      },
       "ttfb_ms": 88.0,
       "total_ms": 109.0,
       "wire_bytes": 14000,
@@ -369,6 +396,8 @@
       "encoding": "gzip",
       "ratio": 4.36,
       "content_type": "text/html",
+      "header_bytes": null,
+      "stream_id": null,
       "connection_reused": false
     },
     "cache": {

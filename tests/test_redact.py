@@ -8,7 +8,15 @@ import pytest
 from wj import findings, redact, schema
 
 
-def sample_trace(protocol="http/1.1"):
+# A why_not in the exact shape wj/run.py builds for a collector that raised:
+# f"{type(exc).__name__}: {exc}". The OS wrote the address into its own error
+# message; nothing filtered it. No OBSERVED section can carry a string like
+# this, which is precisely why the leak fixture needs an unobserved variant.
+UNOBSERVED_WHY_NOT = ("OSError: [Errno 65] No route to host 192.168.1.1 "
+                      "via gateway aa:bb:cc:dd:ee:ff")
+
+
+def sample_trace(protocol="http/1.1", unobserved=None):
     """A real trace document, assembled the same way orchestrate() does it.
 
     Built from schema.new_trace(...) with every section populated, then run
@@ -27,6 +35,15 @@ def sample_trace(protocol="http/1.1"):
     which the http/1.1 variant ever produces), and a leak walker that only
     ever sees the empty/None h1 variant of those fields has never actually
     walked over populated instances of them.
+
+    `unobserved="path"` (or any section name) replaces that section with a
+    real unobserved one, carrying the kind of why_not wj/run.py actually
+    produces. Every other variant of this fixture has every section observed
+    -- which meant the leak walker could never reach a why_not string AT ALL,
+    while wj/run.py was turning arbitrary exception text into exactly that
+    field. That is this project's documented three-time failure mode in its
+    exact shape: a guard proving the observed path clean while structurally
+    excluding the channel that carries uncontrolled text.
     """
     trace = schema.new_trace(
         target={"input": "https://example.com/", "host": "example.com",
@@ -138,6 +155,9 @@ def sample_trace(protocol="http/1.1"):
     trace["timings"] = {"waterfall": [{"label": "DNS", "start_ms": 0.0, "end_ms": 12.0}],
                         "total_ms": 109.0}
 
+    if unobserved:
+        trace[unobserved] = schema.unobserved(UNOBSERVED_WHY_NOT)
+
     # Real pipeline order (wj.run.orchestrate): analyse before build_osi.
     findings.analyse(trace)
     trace["osi"] = schema.build_osi(trace)
@@ -157,6 +177,22 @@ def test_the_leak_fixture_populates_every_section(protocol):
     # loudly, which is the whole point of this test.
     trace = sample_trace(protocol)
     assert all(trace[s]["observed"] for s in schema.SECTIONS)
+
+
+@pytest.mark.parametrize("name", schema.SECTIONS)
+def test_the_unobserved_leak_fixture_puts_an_identifier_in_a_why_not(name):
+    # The other direction, and the one that makes the walker test below prove
+    # something: the unobserved variant must actually carry an identifier in
+    # its why_not, or a fixture that quietly stopped doing so would let
+    # redact_trace() pass by having nothing to find.
+    trace = sample_trace(unobserved=name)
+    assert trace[name]["observed"] is False
+    # Specifically in the why_not string itself -- the unredacted fixture
+    # leaks in a dozen other places by design, so a bare "find_leaks() found
+    # something" would pass no matter what this variant carried.
+    why_not = trace[name]["why_not"]
+    assert any(text == why_not for text, _offender in find_leaks(trace)), \
+        f"{name} why_not no longer carries an identifier"
 
 
 @pytest.mark.parametrize("protocol", ["http/1.1", "h2"])
@@ -407,6 +443,15 @@ def find_leaks(document):
     return violations
 
 
+@pytest.mark.parametrize("name", schema.SECTIONS)
+def test_redacted_document_has_no_leak_from_an_unobserved_sections_why_not(name):
+    # The walker, run over a document that actually HAS a why_not to walk --
+    # for every section, since each has its own unobserved path.
+    out = redact.redact_trace(sample_trace(unobserved=name))
+    leaks = find_leaks(out)
+    assert leaks == [], leaks
+
+
 @pytest.mark.parametrize("protocol", ["http/1.1", "h2"])
 def test_redacted_document_has_no_mac_or_private_ip_anywhere_structurally(protocol):
     # Walked for both variants: the h2 shape of the fields Task 4 added
@@ -420,16 +465,48 @@ def test_redacted_document_has_no_mac_or_private_ip_anywhere_structurally(protoc
     assert leaks == [], leaks
 
 
-def test_structural_leak_walker_catches_a_ula_ipv6_address_planted_in_a_note():
-    # redact.redact_trace() only ever touches the structured local/tcp/dns/path
-    # fields -- it does not scrub free-text note content at all. Planting a
-    # ULA IPv6 address in a note demonstrates the one channel the general
-    # redaction path cannot reach, and proves the walker itself (once IPv6
-    # matching exists) still catches it there.
+def test_the_walker_itself_still_sees_a_ula_ipv6_address_in_a_note():
+    # The walker's own self-test, on an UNREDACTED document: it must be able
+    # to see a ULA IPv6 address wherever it sits, or every "no leaks" result
+    # it reports below is worthless. (This used to run over the REDACTED
+    # document and assert the leak survived, pinning redact_trace()'s failure
+    # to scrub notes as if it were intended behaviour.)
+    trace = sample_trace()
+    trace["notes"].append({"severity": "info", "section": "path",
+                           "text": "a hop responded from fd12:3456:789a::1"})
+    leaks = find_leaks(trace)
+    assert any("fd12:3456:789a::1" == offender for _text, offender in leaks), leaks
+
+
+def test_a_note_carrying_an_identifier_is_scrubbed_not_published():
+    # notes[].text is free text assembled by wj/findings.py from section
+    # values, copied verbatim into the export and onto the page. It went out
+    # entirely unscrubbed while negotiation.signal -- the one free-text field
+    # whose producer provably cannot embed an identifier -- was the only
+    # field _scrub_embedded_identifiers() was ever applied to.
     trace = sample_trace()
     trace["notes"].append({"severity": "info", "section": "path",
                            "text": "a hop responded from fd12:3456:789a::1"})
     out = redact.redact_trace(trace)
 
-    leaks = find_leaks(out)
-    assert any("fd12:3456:789a::1" == offender for _text, offender in leaks), leaks
+    assert out["notes"][-1]["text"] == f"a hop responded from {redact.REDACTED}"
+    assert find_leaks(out) == []
+
+
+@pytest.mark.parametrize("planted, survivor", [
+    ("OSError: [Errno 65] No route to host 192.168.1.1", "No route to host"),
+    ("timeout reaching fd12:3456:789a::1", "timeout reaching"),
+    ("arp said the gateway is aa:bb:cc:dd:ee:ff", "arp said the gateway is"),
+])
+def test_an_unobserved_sections_why_not_is_scrubbed_not_published(planted, survivor):
+    # wj/run.py renders ANY collector exception as f"{type(exc).__name__}:
+    # {exc}" -- arbitrary text from a socket, a resolver, or the OS, straight
+    # into the exported document. The rest of the message is a real
+    # measurement of what went wrong and must survive; only the identifier goes.
+    trace = sample_trace()
+    trace["path"] = schema.unobserved(planted)
+    out = redact.redact_trace(trace)
+
+    assert survivor in out["path"]["why_not"]
+    assert redact.REDACTED in out["path"]["why_not"]
+    assert find_leaks(out) == []

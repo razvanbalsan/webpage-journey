@@ -2,6 +2,7 @@
 
 from rich import box
 from rich.console import Group
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -182,8 +183,20 @@ def render_dns(console, trace):
         alpn_text = ", ".join(alpn) if alpn else "(record present, no ALPN param)"
         ech = section.get("ech")
         ech_text = "yes" if ech is True else "no" if ech is False else "unknown"
-        tree.add("[dim]ALPN advertised (from the HTTPS record — what the host "
-                  f"says it supports, deliberately not what this tool negotiated): {alpn_text}[/dim]")
+        # Mirrors webpage-journey.html's own wording for this row. The
+        # retired "deliberately not what this tool negotiated" claim was a
+        # claim about this tool's DESIGN, and this branch falsified it: the
+        # TLS handshake panel now reports what ALPN actually selected.
+        #
+        # Text(), not a markup f-string: alpn_text is built from the target's
+        # own DNS HTTPS record. Interpolated into markup, a host publishing
+        # alpn="[/dim]h2 (verified safe)[dim]" got that shown as if it were
+        # the measured token, and a malformed tag such as "[/foo]" raised
+        # MarkupError and aborted the render after a successful trace.
+        tree.add(Text("ALPN advertised (HTTPS record — what the host says it "
+                      "supports; see Negotiated in the TLS handshake panel "
+                      f"for what this tool actually got): {alpn_text}",
+                      style="dim"))
         tree.add(f"[dim]ECH (Encrypted Client Hello) advertised: {ech_text}[/dim]")
     elif "HTTPS" in records_map and "HTTPS" not in failed:
         tree.add("[dim]ALPN / ECH: no HTTPS record published[/dim]")
@@ -213,18 +226,27 @@ def render_dns(console, trace):
 def render_negotiation_line(console, trace):
     """One line, not a panel — which protocol was chosen and on what evidence."""
     section = trace.get("negotiation", {})
+    # Every string on this line is host-controlled or free text: advertised
+    # comes from the target's DNS HTTPS record, chosen from the server's own
+    # ALPN reply, signal and why_not are free text. Built as Text() with an
+    # explicit style rather than a markup f-string, so a token like
+    # "[/dim]h2 (verified safe)[dim]" is shown literally instead of being
+    # printed as though it were the measured value, and a malformed tag like
+    # "[/foo]" cannot raise MarkupError and abort the whole render after a
+    # trace that otherwise succeeded.
     if not section.get("observed"):
-        console.print(f"[dim]Protocol negotiation not observed — "
-                      f"{section.get('why_not') or 'not collected'}[/dim]")
+        console.print(Text("Protocol negotiation not observed — "
+                           f"{section.get('why_not') or 'not collected'}",
+                           style="dim"))
         return
 
     advertised = ", ".join(section.get("advertised") or []) or "nothing"
     offered = ", ".join(section.get("offered") or []) or "nothing (no TLS)"
     chosen = section.get("chosen")
     tail = f"chose {chosen}" if chosen else "no protocol selected"
-    console.print(f"[dim]Host advertises {advertised} "
-                  f"({section.get('signal') or 'unknown signal'}) · "
-                  f"offered {offered} · {tail}[/dim]")
+    console.print(Text(f"Host advertises {advertised} "
+                       f"({section.get('signal') or 'unknown signal'}) · "
+                       f"offered {offered} · {tail}", style="dim"))
 
 
 def render_tcp(console, trace):
@@ -366,15 +388,33 @@ def render_http(console, trace):
         status_text = "[dim]no status line in the response[/dim]"
     else:
         colour = "green" if 200 <= status < 300 else "yellow" if status < 400 else "red"
-        status_text = f"[{colour} bold]{' '.join(p for p in (protocol, str(status)) if p)}[/{colour} bold]"
-    if final.get("connection_reused"):
-        status_text = join_present([status_text, "reused connection"], sep=" · ")
+        # protocol is read straight off the server's status line (h1) or its
+        # :status frame (h2), so it is host-controlled and must not be parsed
+        # as Rich markup on its way into this f-string.
+        line = escape(" ".join(p for p in (protocol, str(status)) if p))
+        status_text = f"[{colour} bold]{line}[/{colour} bold]"
+    # Three states, three distinct readings -- the same contract
+    # webpage-journey.html implements for this field. `if connection_reused:`
+    # collapsed an explicit measured False into the same silence as an
+    # unmeasured None, so the one renderer said less than the other about the
+    # same measurement.
+    reused = final.get("connection_reused")
+    status_text = join_present([status_text,
+                                "reused the earlier connection" if reused is True else
+                                "opened fresh" if reused is False else
+                                "connection reuse not reported"], sep=" · ")
 
     rows = []
     for hop in section.get("hops") or []:
         detail = join_present([hop.get("url"), hop.get("location")], sep=" → ")
-        if hop.get("connection_reused"):
-            detail = join_present([detail, "reused connection"], sep=" · ")
+        # Same three states as above; here a measured False stays silent (a
+        # measured negative earns no marker elsewhere either) while None says
+        # plainly that it was not reported -- again mirroring the page's own
+        # per-hop reading rather than inventing a second contract.
+        hop_reused = hop.get("connection_reused")
+        reuse_note = ("reused the same connection" if hop_reused is True else
+                      "connection reuse not reported" if hop_reused is None else None)
+        detail = join_present([detail, reuse_note], sep=" · ")
         rows.append((f"{hop['status']} redirect", detail))
     if section.get("redirect_limit_reached") and section.get("hops"):
         # A hop count alone reads as the whole chain — say plainly that it was cut short.
@@ -417,6 +457,10 @@ def render_http(console, trace):
         ("Body", body_text),
         ("Content type", final.get("content_type")),
         ("Header compression", header_compression),
+        # HTTP/2 only: h1 has no streams to number, so an absent stream_id is
+        # the correct reading of an HTTP/1.1 trace and _kv_table drops the row.
+        ("Stream", f"stream {final['stream_id']} on the shared connection"
+                   if final.get("stream_id") is not None else None),
         ("CDN", section.get("cdn")),
         ("Cache", cache_value),
         ("Security grade", (section.get("security") or {}).get("grade")),

@@ -103,3 +103,27 @@ def test_orchestrate_attaches_findings_and_osi():
     trace = run.orchestrate(make_ctx(), collectors=fake_collectors())
     assert set(trace["osi"]) == {"l1", "l2", "l3", "l4", "l5", "l6", "l7"}
     assert isinstance(trace["notes"], list)
+
+
+def test_the_negotiation_collectors_own_dns_guard_is_the_one_that_fires():
+    # M9: wj/collect/negotiate.py's collect() carries its own dns guard, whose
+    # message quotes dns's own why_not so the reader learns WHY it did not
+    # resolve. DEPENDS_ON used to gate "negotiation" on dns as well, which
+    # returned first with a shorter, different message and left the
+    # collector's branch permanently unreachable through orchestrate() -- two
+    # divergent messages for one condition, only one of which anyone could
+    # ever see.
+    from wj.collect import negotiate
+
+    trace = run.orchestrate(
+        make_ctx(),
+        collectors=fake_collectors(
+            dns=lambda ctx: schema.unobserved("NXDOMAIN for example.com"),
+            negotiation=negotiate.collect))
+
+    assert trace["negotiation"]["observed"] is False
+    assert "NXDOMAIN for example.com" in trace["negotiation"]["why_not"]
+
+
+def test_negotiation_is_not_gated_twice_for_the_same_condition():
+    assert "negotiation" not in run.DEPENDS_ON
