@@ -3,14 +3,32 @@
 import json
 from pathlib import Path
 
+from tests.test_transport_h2 import FakeTLSSocket
 from wj import capabilities, redact, schema
 from wj.collect import negotiate as negotiate_collect
 from wj.collect import tls as tls_collect
 from wj.context import Context
 from wj.run import orchestrate
-from wj.transport.h2 import _decoded_header_size
+from wj.transport import h2 as h2_transport
 
 OUT = Path(__file__).parent / "golden"
+
+
+def real_h2_header_bytes(ctx, status, headers):
+    """The real HPACK wire cost of `headers`, measured by driving the real
+    HTTP/2 transport (wj.transport.h2.fetcher) against a real, server-side
+    h2.connection.H2Connection -- tests/test_transport_h2.py's FakeTLSSocket,
+    the same harness that transport's own tests use to encode real HEADERS
+    frames. No hand-picked number: an earlier draft of h2-host.json guessed
+    a wire figure that turned out to be smaller than any standard HPACK
+    encoder can produce for these headers, which is exactly the kind of
+    drift this function exists to make impossible -- it cannot be wrong
+    about what the real encoder emits, because it IS the real encoder.
+    """
+    response_headers = [(":status", str(status))] + [(k, v) for k, v in headers]
+    sock = FakeTLSSocket(response_headers)
+    response = h2_transport.fetcher(ctx)(f"https://{ctx.host}/", sock)
+    return response["header_bytes"]
 
 
 def ctx_for(host, tools):
@@ -298,14 +316,12 @@ def h2_collectors():
         final_headers = [["content-type", "text/html; charset=utf-8"],
                          ["content-encoding", "gzip"],
                          ["cache-control", "max-age=600"]]
-        # decoded is computed by calling the real _decoded_header_size()
-        # against these same headers (same discipline as tls()'s caa_match
-        # above), not hand-derived -- wire is this tool's own byte-cost
-        # measurement of the compressed HEADERS frame, which nothing in this
-        # stub can reproduce without a real HPACK encoder on a real
-        # connection, so it is chosen only to be honestly smaller than
-        # decoded, per wj/transport/h2.py's _decoded_header_size docstring.
-        decoded_header_size = _decoded_header_size(final_headers)
+        # Both wire and decoded come from real_h2_header_bytes() actually
+        # driving the real transport (see its docstring above) against these
+        # same headers, the same discipline as tls()'s caa_match above --
+        # neither is hand-derived, so this fixture cannot drift from what
+        # HPACK genuinely does to this header set.
+        header_bytes = real_h2_header_bytes(ctx, 200, final_headers)
 
         # Two same-origin redirects, all over one HTTP/2 connection: the
         # first request opens it (connection_reused: False -- it is the TLS
@@ -329,7 +345,7 @@ def h2_collectors():
                    "ttfb_ms": 10.5, "total_ms": 26.0, "wire_bytes": 9800,
                    "decoded_bytes": 41160, "encoding": "gzip", "ratio": 4.2,
                    "content_type": "text/html",
-                   "header_bytes": {"wire": 52, "decoded": decoded_header_size},
+                   "header_bytes": header_bytes,
                    "connection_reused": True},
             cache={"state": None, "age": None, "header": None, "directives": "max-age=600"},
             cdn=None,

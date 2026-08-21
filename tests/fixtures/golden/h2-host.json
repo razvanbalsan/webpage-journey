@@ -398,7 +398,7 @@
       "ratio": 4.2,
       "content_type": "text/html",
       "header_bytes": {
-        "wire": 52,
+        "wire": 36,
         "decoded": 92
       },
       "connection_reused": true

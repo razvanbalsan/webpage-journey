@@ -93,8 +93,10 @@ disable it.
 server actually selects. When `h2` is not advertised, or this build cannot offer it (the
 `h2` library is missing), it falls back to `http/1.1`. It does not yet speak HTTP/3 — a
 host that advertises `h3` is reported as a finding ("this host advertises h3, which this
-tool does not speak") rather than acted on. Every trace records which protocol was
-actually used in `negotiation.chosen`, measured from the handshake itself, not guessed.
+tool does not speak") rather than acted on. When TLS ran and the handshake selected a
+protocol over ALPN, the trace records it in `negotiation.chosen`, measured from the
+handshake itself; a `--no-tls` run, or a handshake that completes without selecting one,
+leaves it unmeasured.
 
 ## The rule these tools follow
 

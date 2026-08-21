@@ -60,8 +60,10 @@ Protocol support:
   host's DNS HTTPS record advertises it, and falls back to HTTP/1.1 when
   it does not, or when h2 was advertised but this build cannot offer it
   (e.g. the h2 library is missing). What the server actually negotiates
-  is a separate, honestly-labelled measurement -- every trace reports
-  which protocol was used. It does not yet speak HTTP/3; a host that
+  is a separate, honestly-labelled measurement: when TLS ran and the
+  handshake selected a protocol over ALPN, the trace records it; a
+  --no-tls run, or a handshake that completes without selecting one,
+  leaves it unmeasured. It does not yet speak HTTP/3; a host that
   advertises h3 is reported as a finding (e.g. "this host advertises h3,
   which this tool does not speak").
 

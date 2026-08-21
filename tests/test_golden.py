@@ -135,6 +135,23 @@ def test_redacted_golden_fixture_matches_a_fresh_generator_run():
     assert fresh == committed
 
 
+@pytest.mark.parametrize("name", NAMES)
+def test_golden_fixture_negotiation_chosen_agrees_with_tls_alpn(name):
+    # I1's actual invariant, checked directly rather than only by proxy: if
+    # make_golden.py's chosen-propagation (mirroring wj/collect/http.py's
+    # own wiring) were ever deleted, every fixture would simply regenerate
+    # with negotiation.chosen back to null, and
+    # test_golden_fixture_matches_a_fresh_generator_run above would still
+    # pass -- a fixture matching its own (regressed) generator proves
+    # nothing about whether the generator is still right. This fails
+    # regardless of whether the fixture and the generator agree with each
+    # other, because it does not depend on the generator at all.
+    trace = json.loads((GOLDEN / name).read_text())
+    if not trace["tls"]["observed"]:
+        pytest.skip("no TLS handshake to compare against")
+    assert trace["negotiation"]["chosen"] == trace["tls"]["alpn"]
+
+
 def test_h2_fixture_negotiation_agrees_with_the_real_chooser():
     # The fixture-fidelity pattern above, applied to negotiate.choose():
     # h2-host.json's negotiation.offered must be what the real chooser
@@ -156,3 +173,19 @@ def test_h2_fixture_has_a_hop_that_reused_the_connection():
     trace = json.loads((GOLDEN / "h2-host.json").read_text())
     reused_hops = [h for h in trace["http"]["hops"] if h["connection_reused"] is True]
     assert reused_hops, "expected at least one hop with connection_reused: true"
+
+
+def test_h2_fixture_header_bytes_agrees_with_the_real_transport():
+    # Fixture-fidelity pattern again, for the one number in header_bytes
+    # that a real header list makes checkable: a prior draft of this
+    # fixture hand-picked "wire" and got a value no standard HPACK encoder
+    # can produce for these headers. make_golden.real_h2_header_bytes()
+    # drives the real transport against a real h2.connection.H2Connection
+    # (tests/test_transport_h2.py's FakeTLSSocket) -- re-running it here
+    # against the fixture's own final.headers must reproduce exactly what
+    # is committed, not a hand-derived or otherwise-guessed number.
+    trace = json.loads((GOLDEN / "h2-host.json").read_text())
+    final = trace["http"]["final"]
+    ctx, _ = make_golden.specs()["h2-host.json"]
+    real = make_golden.real_h2_header_bytes(ctx, final["status"], final["headers"])
+    assert real == final["header_bytes"]

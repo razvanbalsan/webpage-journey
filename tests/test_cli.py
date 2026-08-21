@@ -81,8 +81,13 @@ def test_help_documents_redaction_default():
 
 def test_help_documents_protocol_negotiation():
     help_text = build_parser().format_help()
-    assert "HTTP/1.1" in help_text
-    assert "ALPN" in help_text
+    # Specific enough to actually fail if the epilog regresses back to the
+    # old "speaks only HTTP/1.1" claim -- that older text also contained the
+    # substrings "HTTP/1.1" and "ALPN" this test used to check for, so it
+    # could never have caught its own removal.
+    assert "offers h2 over ALPN" in help_text
+    assert "falls back to HTTP/1.1" in help_text
+    assert "speaks only HTTP/1.1" not in help_text
 
 
 def test_help_keeps_the_authorisation_line():
