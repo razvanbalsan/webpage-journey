@@ -1,3 +1,7 @@
+import socket
+import ssl
+from urllib.parse import urlsplit
+
 import h2.config
 import h2.connection
 import h2.events
@@ -371,3 +375,94 @@ def test_missing_h2_library_is_reported_not_crashed():
                   timeout=5.0, deadline=1e9, caps=caps, results={})
     with pytest.raises(h2_transport.TransportUnavailable):
         h2_transport.fetcher(ctx)
+
+
+class RecordingTLSSocket:
+    """Stands in for ssl.SSLSocket.wrap_socket()'s return value -- records
+    every byte handed to sendall() so a test can prove the guard raises
+    before any HTTP/2 preface (or anything else) is written."""
+
+    def __init__(self, alpn):
+        self._alpn = alpn
+        self.sent = bytearray()
+        self.closed = False
+
+    def selected_alpn_protocol(self):
+        return self._alpn
+
+    def settimeout(self, _seconds):
+        pass
+
+    def sendall(self, data):
+        self.sent += data
+
+    def recv(self, _size):
+        return b""
+
+    def close(self):
+        self.closed = True
+
+
+class FakeTLSContext:
+    def __init__(self, tls_sock):
+        self._tls_sock = tls_sock
+
+    def set_alpn_protocols(self, protocols):
+        pass
+
+    def wrap_socket(self, sock, server_hostname):
+        return self._tls_sock
+
+
+def _redirect_ctx():
+    caps = capabilities.Capabilities(libs={"h2": True}, tools={},
+                                     privileged=False, can_sudo=False)
+    return Context(host="example.com", scheme="https", port=443, path="/",
+                   timeout=5.0, deadline=1e9, caps=caps, results={})
+
+
+def test_open_connection_refuses_a_redirect_hop_that_negotiated_something_other_than_h2(monkeypatch):
+    # Symmetric to h1.open_connection's own guard (see test_transport_h1.py):
+    # a redirect hop's ALPN offer is still driven by the ORIGINAL host's
+    # negotiation decision, so the target can legitimately pick something
+    # this transport does not speak. That must be reported, not silently
+    # followed by writing an HTTP/2 connection preface onto it.
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **k: RecordingTLSSocket("http/1.1"))
+    tls_sock = RecordingTLSSocket("http/1.1")
+    monkeypatch.setattr(ssl, "create_default_context", lambda: FakeTLSContext(tls_sock))
+
+    with pytest.raises(OSError) as excinfo:
+        h2_transport.open_connection(urlsplit("https://redirect.example/"), _redirect_ctx())
+
+    assert "http/1.1" in str(excinfo.value)
+    assert "redirect.example" in str(excinfo.value)
+    assert tls_sock.closed is True
+
+
+def test_open_connection_accepts_a_redirect_hop_that_negotiated_h2(monkeypatch):
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **k: RecordingTLSSocket("h2"))
+    tls_sock = RecordingTLSSocket("h2")
+    monkeypatch.setattr(ssl, "create_default_context", lambda: FakeTLSContext(tls_sock))
+
+    result = h2_transport.open_connection(urlsplit("https://redirect.example/"), _redirect_ctx())
+
+    assert result is tls_sock
+    assert tls_sock.closed is False
+
+
+def test_h2_fetch_writes_zero_bytes_when_a_redirect_hop_negotiated_http1(monkeypatch):
+    # The guard above proves open_connection() itself raises. This drives the
+    # real fetch() path -- the one wj/collect/http.py actually calls for a
+    # redirect hop (sock=None) -- with a socket that records every byte sent,
+    # to prove the HTTP/2 connection preface is never written once the guard
+    # has something to catch.
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **k: RecordingTLSSocket("http/1.1"))
+    tls_sock = RecordingTLSSocket("http/1.1")
+    monkeypatch.setattr(ssl, "create_default_context", lambda: FakeTLSContext(tls_sock))
+
+    with pytest.raises(OSError) as excinfo:
+        h2_transport.fetcher(make_ctx())("https://redirect.example/", None)
+
+    assert "http/1.1" in str(excinfo.value)
+    assert tls_sock.sent == bytearray()
+    assert tls_sock.closed is True

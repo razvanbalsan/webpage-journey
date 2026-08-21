@@ -112,8 +112,16 @@ def dechunk(body):
     return bytes(out)
 
 
-def open_connection(split, ctx):
-    """Open a connection for a redirect hop, matching the URL's own scheme."""
+def open_connection(split, ctx, spoken_alpn=SPOKEN_ALPN):
+    """Open a connection for a redirect hop, matching the URL's own scheme.
+
+    `spoken_alpn` is the one protocol the CALLING transport can put on the
+    wire -- h1.fetcher() calls this with the default (SPOKEN_ALPN, "http/1.1")
+    and h2.fetcher() calls it with "h2" (see wj/transport/h2.py). The guard
+    below is the same either way: whatever the redirect target actually
+    negotiated over ALPN must match what the caller is about to speak, or it
+    is reported, not silently followed by writing the wrong protocol's bytes.
+    """
     import socket
     import ssl
 
@@ -124,11 +132,11 @@ def open_connection(split, ctx):
         context.set_alpn_protocols(alpn_for(ctx))
         sock = context.wrap_socket(sock, server_hostname=split.hostname)
         negotiated = sock.selected_alpn_protocol()
-        if negotiated is not None and negotiated != SPOKEN_ALPN:
+        if negotiated is not None and negotiated != spoken_alpn:
             sock.close()
             raise OSError(
                 f"redirect hop to {split.hostname} negotiated {negotiated} over ALPN, "
-                f"which this transport cannot speak (only {SPOKEN_ALPN})")
+                f"which this transport cannot speak (only {spoken_alpn})")
     return sock
 
 

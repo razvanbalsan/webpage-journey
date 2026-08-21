@@ -47,7 +47,16 @@ def sample_trace():
 
     trace["negotiation"] = schema.observed(
         advertised=[], offered=["http/1.1"], signal="no HTTPS record",
-        unavailable=[], chosen=None, attempted=[])
+        unavailable=[], chosen="http/1.1",
+        # Phase 1 never populates this -- there is no fallback ladder yet (see
+        # wj/collect/negotiate.py and Task 4's brief), so every real trace this
+        # tool can currently produce carries attempted=[] structurally, the
+        # same as advertised/offered/unavailable can each independently be
+        # empty. Nothing here can leak an identifier because nothing here is
+        # ever populated; Phase 2 is what gives this field per-attempt records
+        # (see .superpowers/sdd/2026-08-21-http2-phase1/task-8-brief.md) and
+        # is also what must extend this fixture once it does.
+        attempted=[])
 
     trace["tcp"] = schema.observed(
         candidates=[{"ip": "93.184.216.34", "family": "ipv4", "connect_ms": 12.4, "error": None}],
@@ -66,11 +75,15 @@ def sample_trace():
         resumption={"tested": False}, legacy_versions_accepted=[])
 
     trace["http"] = schema.observed(
-        hops=[], redirect_limit_reached=False,
+        hops=[{"url": "http://example.com/", "status": 301,
+              "location": "https://example.com/", "protocol": "HTTP/1.1",
+              "ttfb_ms": 12.0, "connection_reused": False, "stream_id": None}],
+        redirect_limit_reached=False,
         final={"url": "https://example.com/", "status": 200, "reason": "OK",
                "protocol": "HTTP/1.1", "headers": [["content-type", "text/html"]],
                "ttfb_ms": 88.0, "total_ms": 109.0, "wire_bytes": 14000, "decoded_bytes": 61000,
-               "encoding": "gzip", "ratio": 4.36, "content_type": "text/html"},
+               "encoding": "gzip", "ratio": 4.36, "content_type": "text/html",
+               "header_bytes": None},
         cache={"state": None, "age": None, "header": None, "directives": None},
         cdn=None,
         security={"grade": "A", "present": {}, "missing": [],

@@ -2,8 +2,18 @@ import gzip
 
 import pytest
 
+from wj import capabilities
 from wj.collect import http as http_collect
+from wj.context import Context
 from wj.transport import h1
+
+
+def make_ctx():
+    caps = capabilities.Capabilities(libs={"h2": True}, tools={},
+                                     privileged=False, can_sudo=False)
+    return Context(host="example.com", scheme="https", port=443, path="/",
+                   timeout=5.0, deadline=1e9, caps=caps, results={})
+
 
 RAW_200 = (
     b"HTTP/1.1 200 OK\r\n"
@@ -316,6 +326,125 @@ def test_collect_reports_content_type_as_absent_not_empty_string():
     assert section["final"]["content_type"] is None
 
 
+def test_transport_follows_what_alpn_actually_selected():
+    ctx = make_ctx()
+    ctx.results["tls"] = {"observed": True, "alpn": "h2", "_socket": object()}
+    module, protocol = http_collect.transport_for(ctx)
+    assert protocol == "h2"
+    assert module is __import__("wj.transport.h2", fromlist=["h2"])
+
+
+def test_transport_falls_to_http1_when_alpn_selected_nothing():
+    # A server that does no ALPN at all leaves selected_alpn_protocol() None.
+    # HTTP/1.1 is the correct reading of that, not a guess.
+    ctx = make_ctx()
+    ctx.results["tls"] = {"observed": True, "alpn": None, "_socket": object()}
+    _module, protocol = http_collect.transport_for(ctx)
+    assert protocol == "http/1.1"
+
+
+def test_negotiation_chosen_is_filled_in_from_the_handshake():
+    ctx = make_ctx()
+    ctx.results["tls"] = {"observed": True, "alpn": "h2", "_socket": object()}
+    ctx.results["negotiation"] = {"observed": True, "offered": ["h2", "http/1.1"],
+                                  "chosen": None, "attempted": []}
+
+    http_collect.collect(ctx, fetch=lambda url, sock: {
+        "protocol": "HTTP/2", "status": 200, "reason": None,
+        "headers": [("content-type", "text/html")], "body": b"x",
+        "ttfb_ms": 5.0, "total_ms": 6.0, "wire_bytes": 1,
+        "stream_id": 1, "header_bytes": {"wire": 30, "decoded": 90}})
+
+    assert ctx.results["negotiation"]["chosen"] == "h2"
+
+
+def test_h2_hops_report_connection_reuse():
+    # HTTP/1.1 sends Connection: close, so every hop is a new connection.
+    # HTTP/2 reuses one, and the trace should say so.
+    ctx = make_ctx()
+    ctx.results["tls"] = {"observed": True, "alpn": "h2", "_socket": object()}
+    ctx.results["negotiation"] = {"observed": True, "offered": ["h2"], "chosen": None,
+                                  "attempted": []}
+    pages = {
+        "https://example.com/": {
+            "protocol": "HTTP/2", "status": 301, "reason": None,
+            "headers": [("location", "https://example.com/next")], "body": b"",
+            "ttfb_ms": 1.0, "total_ms": 1.0, "wire_bytes": 0,
+            "stream_id": 1, "header_bytes": {"wire": 20, "decoded": 60}},
+        "https://example.com/next": {
+            "protocol": "HTTP/2", "status": 200, "reason": None,
+            "headers": [("content-type", "text/html")], "body": b"ok",
+            "ttfb_ms": 2.0, "total_ms": 2.0, "wire_bytes": 2,
+            "stream_id": 3, "header_bytes": {"wire": 22, "decoded": 66}},
+    }
+    section = http_collect.collect(ctx, fetch=lambda url, sock: pages[url])
+
+    assert section["hops"][0]["connection_reused"] is False   # the first hop opened it
+    assert section["hops"][0]["stream_id"] == 1
+    assert section["final"]["header_bytes"]["wire"] == 22
+
+
+def test_h2_redirect_hops_keep_the_same_connection_object():
+    # connection_reused: True is only honest if collect() actually hands the
+    # transport the same socket on the next hop -- setting sock = None
+    # unconditionally (the pre-Task-4 behaviour, correct for HTTP/1.1's
+    # Connection: close) would force h2.fetcher() to open a fresh one, making
+    # the flag a lie. Assert on the sock argument fetch() actually receives,
+    # not just the label collect() attaches to the hop.
+    ctx = make_ctx()
+    sentinel_socket = object()
+    ctx.results["tls"] = {"observed": True, "alpn": "h2", "_socket": sentinel_socket}
+    ctx.results["negotiation"] = {"observed": True, "offered": ["h2"], "chosen": None,
+                                  "attempted": []}
+    pages = {
+        "https://example.com/": {
+            "protocol": "HTTP/2", "status": 301, "reason": None,
+            "headers": [("location", "https://example.com/next")], "body": b"",
+            "ttfb_ms": 1.0, "total_ms": 1.0, "wire_bytes": 0,
+            "stream_id": 1, "header_bytes": {"wire": 20, "decoded": 60}},
+        "https://example.com/next": {
+            "protocol": "HTTP/2", "status": 200, "reason": None,
+            "headers": [("content-type", "text/html")], "body": b"ok",
+            "ttfb_ms": 2.0, "total_ms": 2.0, "wire_bytes": 2,
+            "stream_id": 3, "header_bytes": {"wire": 22, "decoded": 66}},
+    }
+    seen_socks = []
+
+    def fetch(url, sock):
+        seen_socks.append(sock)
+        return pages[url]
+
+    http_collect.collect(ctx, fetch=fetch)
+
+    assert seen_socks == [sentinel_socket, sentinel_socket]
+
+
+def test_http1_redirect_hops_open_a_fresh_connection():
+    ctx = make_ctx()
+    ctx.results["tcp"] = {"observed": True, "_socket": object()}
+    ctx.results["tls"] = {"observed": True, "alpn": None, "_socket": object()}
+    pages = {
+        "https://example.com/": {
+            "protocol": "HTTP/1.1", "status": 301, "reason": "Moved Permanently",
+            "headers": [("Location", "https://example.com/next")], "body": b"",
+            "ttfb_ms": 1.0, "total_ms": 1.0, "wire_bytes": 0},
+        "https://example.com/next": {
+            "protocol": "HTTP/1.1", "status": 200, "reason": "OK",
+            "headers": [("content-type", "text/html")], "body": b"ok",
+            "ttfb_ms": 2.0, "total_ms": 2.0, "wire_bytes": 2},
+    }
+    seen_socks = []
+
+    def fetch(url, sock):
+        seen_socks.append(sock)
+        return pages[url]
+
+    http_collect.collect(ctx, fetch=fetch)
+
+    assert seen_socks[0] is not None
+    assert seen_socks[1] is None
+
+
 def test_collect_refuses_the_dead_socket_after_a_failed_handshake():
     from wj import capabilities
     from wj.context import Context
@@ -330,3 +459,24 @@ def test_collect_refuses_the_dead_socket_after_a_failed_handshake():
         "must not attempt a request after a failed handshake"))
     assert section["observed"] is False
     assert "certificate expired" in section["why_not"]
+
+
+def test_a_negotiated_protocol_this_build_cannot_speak_names_the_protocol_not_a_timeout():
+    # Before transport selection existed, this case always fell back to the
+    # h1 transport regardless of what ALPN actually chose -- an h2-accepting
+    # host with no h2 library installed made HTTP/1.1 bytes go out over what
+    # is now an h2-only connection, got no valid HTTP/1.1 response back, and
+    # the caller saw "no response received before the timeout": a real
+    # explanation for a completely different cause. The server agreed to
+    # speak h2; this build cannot; that is what why_not must say, not "timeout".
+    caps = capabilities.Capabilities(libs={"h2": False}, tools={},
+                                     privileged=False, can_sudo=False)
+    ctx = Context(host="example.com", scheme="https", port=443, path="/",
+                  timeout=5.0, deadline=1e9, caps=caps, results={})
+    ctx.results["tls"] = {"observed": True, "alpn": "h2", "_socket": object()}
+
+    section = http_collect.collect(ctx, fetch=None)
+
+    assert section["observed"] is False
+    assert "h2" in section["why_not"]
+    assert "timeout" not in section["why_not"]

@@ -5,7 +5,8 @@ import zlib
 from urllib.parse import urljoin
 
 from wj.schema import observed, unobserved
-from wj.transport import h1
+from wj.transport import TRANSPORTS, h1
+from wj.transport.h2 import TransportUnavailable
 
 MAX_REDIRECTS = 10
 
@@ -152,6 +153,18 @@ def detect_cdn(headers):
     return None
 
 
+def transport_for(ctx):
+    """The transport for the protocol ALPN actually selected.
+
+    The server chooses during the handshake; we follow. A server that does no
+    ALPN leaves this None, and HTTP/1.1 is the correct reading of that rather
+    than a guess.
+    """
+    alpn = (ctx.results.get("tls", {}) or {}).get("alpn")
+    protocol = alpn if alpn in TRANSPORTS else "http/1.1"
+    return TRANSPORTS[protocol], protocol
+
+
 def collect(ctx, fetch=None):
     tls = ctx.results.get("tls", {})
     tcp = ctx.results.get("tcp", {})
@@ -168,7 +181,19 @@ def collect(ctx, fetch=None):
     if sock is None:
         return unobserved("no connection to send a request over")
 
-    fetch = fetch or h1.fetcher(ctx)
+    module, protocol = transport_for(ctx)
+    if fetch is None:
+        try:
+            fetch = module.fetcher(ctx)
+        except TransportUnavailable as exc:
+            # ALPN selected a protocol this build cannot frame. That is an error,
+            # not a fallback: the server agreed to speak it. Retrying on HTTP/1.1
+            # and reporting success would hide a real defect.
+            return unobserved(f"negotiated {protocol} but cannot speak it: {exc}")
+
+    negotiation = ctx.results.get("negotiation")
+    if isinstance(negotiation, dict) and negotiation.get("observed"):
+        negotiation["chosen"] = protocol
 
     url = f"{ctx.scheme}://{ctx.host}{ctx.path}"
     hops = []
@@ -194,12 +219,16 @@ def collect(ctx, fetch=None):
             return section
 
         if 300 <= status < 400 and location:
+            reused = protocol != "http/1.1" and len(hops) > 0
             hops.append({"url": url, "status": status,
                          "location": urljoin(url, location),
                          "protocol": response.get("protocol"),
-                         "ttfb_ms": response.get("ttfb_ms")})
+                         "ttfb_ms": response.get("ttfb_ms"),
+                         "connection_reused": reused,
+                         "stream_id": response.get("stream_id")})
             url = urljoin(url, location)
-            sock = None  # fetch opens a fresh connection for the next hop
+            if protocol == "http/1.1":
+                sock = None   # fetch opens a fresh connection for the next hop
             continue
         limit_reached = False
         break
@@ -219,7 +248,8 @@ def collect(ctx, fetch=None):
                "request": response.get("request") or h1.build_request(fetched_url),
                "ttfb_ms": response.get("ttfb_ms"), "total_ms": response.get("total_ms"),
                "wire_bytes": wire, "decoded_bytes": decoded_bytes,
-               "encoding": encoding, "ratio": ratio, "content_type": content_type},
+               "encoding": encoding, "ratio": ratio, "content_type": content_type,
+               "header_bytes": response.get("header_bytes")},
         cache=cache_state(response["headers"]),
         cdn=detect_cdn(response["headers"]),
         security=grade_security(response["headers"], ctx.scheme),

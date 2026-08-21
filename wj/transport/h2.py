@@ -9,12 +9,24 @@ valid, which they would not if a client library owned the connection.
 import time
 from urllib.parse import urlsplit
 
-from wj.transport.h1 import build_request, open_connection
+from wj.transport.h1 import build_request, open_connection as _open_connection
 
 # HTTP/2 frame types this module cares about (RFC 7540 §6.1, §6.2, §6.10).
 _DATA_FRAME_TYPE = 0
 _HEADER_FRAME_TYPES = (1, 9)  # HEADERS, CONTINUATION
 _END_HEADERS_FLAG = 0x4  # same bit for both HEADERS and CONTINUATION
+
+# The only protocol this transport can put on the wire. h1.open_connection()'s
+# ALPN guard (see wj/transport/h1.py) is shared code, parameterised by
+# spoken_alpn -- without passing this through, a redirect hop that negotiated
+# h2 would be checked against h1's own "http/1.1" and always rejected, and one
+# that negotiated http/1.1 would be silently accepted and get an HTTP/2
+# connection preface written onto it.
+SPOKEN_ALPN = "h2"
+
+
+def open_connection(split, ctx):
+    return _open_connection(split, ctx, spoken_alpn=SPOKEN_ALPN)
 
 
 class TransportUnavailable(Exception):
