@@ -16,6 +16,7 @@ TOOL_NAMES = (
 OPTIONAL_LIBS = {
     "dns": ("dnspython", "DNS record types, TTLs, and the delegation walk"),
     "cryptography": ("cryptography", "full certificate chain parsing"),
+    "h2": ("h2", "HTTP/2 framing"),
 }
 
 

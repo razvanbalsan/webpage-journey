@@ -5,6 +5,6 @@ where the response dict always has the same keys regardless of protocol:
 protocol, status, reason, headers, body, ttfb_ms, total_ms, wire_bytes.
 """
 
-from wj.transport import h1
+from wj.transport import h1, h2
 
-TRANSPORTS = {"http/1.1": h1}
+TRANSPORTS = {"http/1.1": h1, "h2": h2}
