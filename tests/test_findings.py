@@ -143,6 +143,33 @@ def test_alpn_gap_note_covers_a_protocol_this_build_never_offers():
     assert "h2" not in joined.split("h3")[0]   # h2 is not listed as a gap
 
 
+def test_a_clean_trace_with_a_gap_gets_exactly_one_note():
+    # An exact-equality check on trace["notes"], not a substring check -- a
+    # substring assertion can only prove a note's text is present, never that
+    # no OTHER note (fabricated, unmeasured, or otherwise spurious) also
+    # reached the trace. This also pins the gap note's severity and section,
+    # which nothing else in this file checks.
+    trace = base_trace()
+    trace["dns"] = {"observed": True, "dnssec": "secure",
+                    "records": {"A": [{"data": "1.2.3.4", "ttl": 300}],
+                                "AAAA": [{"data": "::1", "ttl": 300}]},
+                    "alpn_advertised": ["h3", "h2"]}
+    trace["negotiation"] = {"observed": True, "advertised": ["h3", "h2"],
+                            "offered": ["h2", "http/1.1"], "unavailable": [],
+                            "chosen": "h2", "attempted": []}
+    trace["tls"] = {"observed": True, "alpn": "h2", "chain": [{"days_left": 80}],
+                    "legacy_versions_accepted": []}
+    trace["http"] = {"observed": True, "hops": [], "final": {"status": 200},
+                     "security": {"grade": "A", "missing": [],
+                                  "cookies": [{"name": "s", "secure": True,
+                                               "httponly": True, "samesite": "Lax"}]}}
+    findings.analyse(trace)
+    assert trace["notes"] == [
+        {"severity": "info", "section": "negotiation",
+         "text": "this host advertises h3, which this tool does not speak — this trace used h2"},
+    ]
+
+
 def test_alpn_gap_note_omits_the_used_clause_when_chosen_is_unmeasured():
     # chosen is None whenever the handshake never reported a negotiated
     # protocol -- a plain http:// run, or any run where TLS was not observed.
