@@ -23,7 +23,8 @@
     ],
     "libs": {
       "dns": true,
-      "cryptography": true
+      "cryptography": true,
+      "h2": true
     },
     "installed_during_run": []
   },
@@ -264,6 +265,17 @@
       "cold": 41.2,
       "warm": 1.1
     }
+  },
+  "negotiation": {
+    "observed": true,
+    "advertised": [],
+    "offered": [
+      "http/1.1"
+    ],
+    "signal": "no HTTPS record",
+    "unavailable": [],
+    "chosen": null,
+    "attempted": []
   },
   "tcp": {
     "observed": true,

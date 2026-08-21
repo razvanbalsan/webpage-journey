@@ -18,6 +18,9 @@ def fake_collectors(**overrides):
             records={"A": [{"data": "93.184.216.34", "ttl": 300}], "AAAA": []},
             timing_ms={"cold": 40.0, "warm": 1.0}, dnssec="secure",
             resolver={"servers": [], "source": "none"}, alpn_advertised=[]),
+        "negotiation": lambda ctx: schema.observed(
+            advertised=[], offered=["http/1.1"], signal="no HTTPS record",
+            unavailable=[], chosen=None, attempted=[]),
         "tcp": lambda ctx: schema.observed(
             chosen={"ip": "93.184.216.34", "family": "ipv4", "port": 443},
             candidates=[{"ip": "93.184.216.34", "family": "ipv4",

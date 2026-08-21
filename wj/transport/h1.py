@@ -6,7 +6,7 @@ the response means belongs to wj/collect/http.py, not here.
 import time
 from urllib.parse import urlsplit
 
-from wj.collect.tls import ALPN_PROTOCOLS
+from wj.collect.tls import alpn_for
 
 DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -114,7 +114,7 @@ def open_connection(split, ctx):
     sock = socket.create_connection((split.hostname, port), timeout=ctx.budget_for(ctx.timeout))
     if split.scheme == "https":
         context = ssl.create_default_context()
-        context.set_alpn_protocols(ALPN_PROTOCOLS)
+        context.set_alpn_protocols(alpn_for(ctx))
         sock = context.wrap_socket(sock, server_hostname=split.hostname)
     return sock
 

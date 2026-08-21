@@ -8,6 +8,7 @@ from wj import findings, schema
 from wj.collect import dns as dns_collect
 from wj.collect import http as http_collect
 from wj.collect import local as local_collect
+from wj.collect import negotiate as negotiate_collect
 from wj.collect import path as path_collect
 from wj.collect import tcp as tcp_collect
 from wj.collect import tls as tls_collect
@@ -19,6 +20,7 @@ EXIT_USAGE = 2
 COLLECTORS = {
     "local": local_collect.collect,
     "dns": dns_collect.collect,
+    "negotiation": negotiate_collect.collect,
     "tcp": tcp_collect.collect,
     "tls": tls_collect.collect,
     "http": http_collect.collect,
@@ -26,7 +28,8 @@ COLLECTORS = {
 }
 
 # section -> the section it needs to have observed before it can run
-DEPENDS_ON = {"tcp": "dns", "tls": "tcp", "http": "tcp", "path": "tcp"}
+DEPENDS_ON = {"negotiation": "dns", "tcp": "dns", "tls": "tcp",
+              "http": "tcp", "path": "tcp"}
 
 
 def _run_one(name, collector, ctx, now):
@@ -114,6 +117,8 @@ def orchestrate(ctx, collectors=None, now=time.monotonic):
         local_future = pool.submit(_run_one, "local", collectors["local"], ctx, now)
         ctx.results["dns"] = _run_one("dns", collectors["dns"], ctx, now)
         ctx.results["local"] = local_future.result()
+
+    ctx.results["negotiation"] = _run_one("negotiation", collectors["negotiation"], ctx, now)
 
     ctx.results["tcp"] = _run_one("tcp", collectors["tcp"], ctx, now)
 

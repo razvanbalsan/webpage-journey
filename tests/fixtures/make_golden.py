@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from wj import capabilities, redact, schema
+from wj.collect import negotiate as negotiate_collect
 from wj.collect import tls as tls_collect
 from wj.context import Context
 from wj.run import orchestrate
@@ -13,7 +14,7 @@ OUT = Path(__file__).parent / "golden"
 
 def ctx_for(host, tools):
     caps = capabilities.Capabilities(
-        libs={"dns": True, "cryptography": True},
+        libs={"dns": True, "cryptography": True, "h2": True},
         tools=tools, privileged=False, can_sudo=False)
     return Context(host=host, scheme="https", port=443, path="/",
                    timeout=8.0, deadline=1e9, caps=caps, results={})
@@ -167,8 +168,8 @@ def collectors(cdn=True, with_path=True, with_local=True):
                    "rtt_ms": 15.0, "asn": 13335, "prefix": "104.16.0.0/12"}],
             asn_path=[8708, 13335], path_mtu=None)
 
-    return {"local": local, "dns": dns, "tcp": tcp, "tls": tls,
-            "http": http, "path": path_collect}
+    return {"local": local, "dns": dns, "negotiation": negotiate_collect.collect,
+            "tcp": tcp, "tls": tls, "http": http, "path": path_collect}
 
 
 def write(name, ctx, collectors_map):

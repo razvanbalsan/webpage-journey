@@ -7,7 +7,7 @@ or absent. A section that could not be collected says so, and says why.
 SCHEMA = "webpage-journey-trace/1"
 SCHEMA_MAJOR = 1
 
-SECTIONS = ("local", "dns", "tcp", "tls", "http", "path")
+SECTIONS = ("local", "dns", "negotiation", "tcp", "tls", "http", "path")
 SEVERITIES = ("info", "warn", "critical")
 
 

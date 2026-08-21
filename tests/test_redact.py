@@ -45,6 +45,10 @@ def sample_trace():
         alpn_advertised=[], ech=False,
         timing_ms={"cold": 12.0, "warm": 1.0, "survey_ms": 30.0})
 
+    trace["negotiation"] = schema.observed(
+        advertised=[], offered=["http/1.1"], signal="no HTTPS record",
+        unavailable=[], chosen=None, attempted=[])
+
     trace["tcp"] = schema.observed(
         candidates=[{"ip": "93.184.216.34", "family": "ipv4", "connect_ms": 12.4, "error": None}],
         chosen={"ip": "93.184.216.34", "family": "ipv4", "port": 443},
