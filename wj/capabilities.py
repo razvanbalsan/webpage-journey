@@ -15,11 +15,7 @@ TOOL_NAMES = (
 # import name -> (pip name, why this run wants it)
 OPTIONAL_LIBS = {
     "dns": ("dnspython", "DNS record types, TTLs, and the delegation walk"),
-    "cryptography": ("cryptography",
-                      "key type/bits, signature algorithm, SCT count, and CA flag on "
-                      "each certificate, plus parsing the full chain beyond the leaf "
-                      "(subject, issuer, validity, SANs and OCSP for the leaf alone "
-                      "are measured either way)"),
+    "cryptography": ("cryptography", "full certificate chain parsing"),
 }
 
 

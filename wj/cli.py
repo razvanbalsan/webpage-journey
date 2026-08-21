@@ -19,8 +19,8 @@ EPILOG = """\
 What it measures:
   It opens real sockets and shells out to real tools to measure what a
   browser will never show you: the gateway MAC your frames are addressed
-  to, the negotiated TLS cipher, the leaf certificate's subject, issuer,
-  validity and SANs, the traceroute hops and their AS numbers, the redirect
+  to, the negotiated TLS cipher, the certificate chain up to the root in
+  your trust store, the traceroute hops and their AS numbers, the redirect
   chain, and the compression ratio. It can emit the result as a versioned
   JSON trace document.
 
@@ -62,14 +62,6 @@ Protocol support:
   about what happened on the wire. What a host supports is a separate,
   honestly-labelled measurement, reported as a finding (e.g. "this host
   advertises h2, h3, but this tool only offers HTTP/1.1").
-
-Certificate detail:
-  A default install parses the leaf certificate's subject, issuer, validity,
-  SANs and OCSP responders with the standard library alone -- no extra
-  dependency required. Installing `cryptography` (the `certs` extra in
-  pyproject.toml) adds key type/bits, signature algorithm, SCT count, and CA
-  flag, plus parses the chain beyond the leaf (intermediates, root). Without
-  it those fields are reported as not measured, never guessed.
 
 Trace only hosts you are authorised to probe.
 """

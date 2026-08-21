@@ -5,7 +5,7 @@ load a webpage — from opposite ends.
 
 - **`trace.py`** opens real sockets and shells out to real tools, so it can measure the
   parts a browser will never show you: the gateway MAC your frames are addressed to, the
-  negotiated cipher, the leaf certificate's subject, issuer, validity and SANs, the
+  negotiated cipher, the certificate chain up to the root in your trust store, the
   traceroute hops and their AS numbers, the redirect chain, and the compression ratio.
 - **`webpage-journey.html`** is a self-contained interactive walkthrough of the same
   journey, mapped onto the OSI model. Drop a trace document on it and every stage swaps
@@ -51,48 +51,23 @@ A few things worth knowing before you rely on this path:
 - **`brew upgrade` does work**, because the repo is tapped rather than installed from a
   loose file. `brew update && brew upgrade razvanbalsan/webpage-journey/webpage-journey`
   picks up a newer tag once one is pushed.
-- **The formula installs only pure-Python dependencies** — no build toolchain, no
-  compiling. It does not bundle `cryptography`; see "What a default install measures"
-  below for what that trades away.
+- **The first install builds `cryptography` from source**, which needs a Rust toolchain.
+  Homebrew will pull in `rust` (and its own build dependencies) automatically the first
+  time this formula — or anything else that needs `cryptography` built this way — is
+  installed; that adds real time (several minutes of compiling) and disk space to a
+  from-scratch install. Later installs of other formulae reuse the already-installed
+  `rust`.
 
 ### pip (any OS)
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install rich dnspython
+.venv/bin/python -m pip install rich dnspython cryptography
 .venv/bin/python trace.py example.com
 ```
 
 Missing optional libraries install themselves on first run (quietly inside a virtualenv,
 after asking against a system Python). `--offline` disables that.
-
-### What a default install measures
-
-A default install — Homebrew or plain `pip`, neither one pulls in `cryptography` — parses
-the leaf certificate's subject, issuer, validity, SANs and OCSP responders straight from
-`ssl.SSLSocket.getpeercert()`. Everything else in the trace is unaffected either way.
-
-What it does **not** measure without the extra: key type/bits, signature algorithm, SCT
-count, and CA flag for any certificate, and anything at all about certificates beyond the
-leaf (intermediates, root) — `ssl.SSLSocket.getpeercert()` only ever describes the peer's
-own leaf certificate. Those fields are reported as not measured, never guessed; the page
-and the terminal report both say so plainly rather than showing a blank that looks like a
-parsing failure.
-
-To get the full picture, add `cryptography` — the one dependency that pulls in a Rust
-toolchain to build from source. `pyproject.toml` declares it as the `certs` extra, so if
-you install this repo as a package (`pip install -e .`), add the extra:
-
-```bash
-.venv/bin/python -m pip install -e ".[certs]"
-```
-
-If you followed the "pip (any OS)" steps above instead — installing dependencies directly
-and running `trace.py` without installing the package — just add `cryptography` itself:
-
-```bash
-.venv/bin/python -m pip install cryptography>=42.0
-```
 
 ## Feeding the page
 
