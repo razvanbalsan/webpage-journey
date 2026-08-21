@@ -1,3 +1,9 @@
+import socket
+import ssl
+from urllib.parse import urlsplit
+
+import pytest
+
 from wj import capabilities
 from wj.context import Context
 from wj.transport import h1
@@ -26,6 +32,40 @@ class FakeSocket:
 
     def close(self):
         pass
+
+
+class FakeTLSSocket(FakeSocket):
+    """Stands in for ssl.SSLSocket.wrap_socket()'s return value in open_connection()
+    tests -- only selected_alpn_protocol() and close() are exercised there."""
+
+    def __init__(self, alpn):
+        super().__init__([])
+        self._alpn = alpn
+        self.closed = False
+
+    def selected_alpn_protocol(self):
+        return self._alpn
+
+    def close(self):
+        self.closed = True
+
+
+class FakeTLSContext:
+    def __init__(self, tls_sock):
+        self._tls_sock = tls_sock
+        self.protocols_offered = None
+
+    def set_alpn_protocols(self, protocols):
+        self.protocols_offered = protocols
+
+    def wrap_socket(self, sock, server_hostname):
+        return self._tls_sock
+
+
+def _redirect_ctx():
+    caps = capabilities.Capabilities(libs={}, tools={}, privileged=False, can_sudo=False)
+    return Context(host="example.com", scheme="https", port=443, path="/",
+                   timeout=5.0, deadline=1e9, caps=caps, results={})
 
 
 def test_fetch_returns_a_dechunked_body_so_decode_body_never_sees_framing():
@@ -83,3 +123,32 @@ def test_fetcher_dechunks_a_response_fragmented_across_recv_calls():
     assert response["body"] == b"hello world"
     assert h1.header_value_absent_after_dechunk(response["headers"]) is True
     assert response["wire_bytes"] == len(b"hello world")
+
+
+def test_open_connection_refuses_a_redirect_hop_that_negotiated_a_protocol_it_cannot_speak(monkeypatch):
+    # The redirect target's own DNS/HTTPS record is never consulted -- ctx still
+    # carries the ORIGINAL host's negotiation decision -- so the target can
+    # legitimately pick something over ALPN this transport does not speak. That
+    # must be reported, not silently followed by writing HTTP/1.1 bytes onto it.
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **k: FakeSocket([]))
+    tls_sock = FakeTLSSocket("h2")
+    monkeypatch.setattr(ssl, "create_default_context", lambda: FakeTLSContext(tls_sock))
+
+    with pytest.raises(OSError) as excinfo:
+        h1.open_connection(urlsplit("https://redirect.example/"), _redirect_ctx())
+
+    assert "h2" in str(excinfo.value)
+    assert "redirect.example" in str(excinfo.value)
+    assert tls_sock.closed is True
+
+
+def test_open_connection_accepts_a_redirect_hop_that_negotiated_http1(monkeypatch):
+    plain_sock = FakeSocket([])
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **k: plain_sock)
+    tls_sock = FakeTLSSocket("http/1.1")
+    monkeypatch.setattr(ssl, "create_default_context", lambda: FakeTLSContext(tls_sock))
+
+    result = h1.open_connection(urlsplit("https://redirect.example/"), _redirect_ctx())
+
+    assert result is tls_sock
+    assert tls_sock.closed is False

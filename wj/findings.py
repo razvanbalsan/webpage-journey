@@ -14,6 +14,7 @@ def analyse(trace):
     trace["notes"] = []
     _analyse_dns(trace)
     _analyse_tls(trace)
+    _analyse_negotiation(trace)
     _analyse_http(trace)
 
 
@@ -56,17 +57,36 @@ def _analyse_tls(trace):
         add_note(trace, "warn", "tls",
                  "the presented issuer is not listed in the zone's CAA records")
 
-    dns = trace.get("dns", {})
-    advertised = [p for p in dns.get("alpn_advertised") or [] if p != "http/1.1"]
-    if advertised:
-        negotiated = tls.get("alpn")
-        if negotiated:
-            detail = f"and negotiated {negotiated}"
-        else:
-            detail = "and the server did not negotiate an ALPN protocol"
-        add_note(trace, "info", "tls",
-                 f"this host advertises {', '.join(advertised)}, "
-                 f"but this tool only offers HTTP/1.1 {detail}")
+
+def _analyse_negotiation(trace):
+    negotiation = trace.get("negotiation", {})
+    if not negotiation.get("observed"):
+        return
+
+    advertised = list(negotiation.get("advertised") or [])
+    offered = set(negotiation.get("offered") or [])
+    unavailable = set(negotiation.get("unavailable") or [])
+
+    # A protocol the host advertises that we never put on the wire. Anything we
+    # offered is not a gap, whether or not the server picked it.
+    gaps = [p for p in advertised if p not in offered]
+    if not gaps:
+        return
+
+    missing_lib = [p for p in gaps if p in unavailable]
+    unsupported = [p for p in gaps if p not in unavailable]
+
+    if missing_lib:
+        add_note(trace, "info", "negotiation",
+                 f"this host advertises {', '.join(missing_lib)}, but the library "
+                 f"needed to speak it is not installed — this trace used "
+                 f"{negotiation.get('chosen') or 'HTTP/1.1'}")
+
+    if unsupported:
+        add_note(trace, "info", "negotiation",
+                 f"this host advertises {', '.join(unsupported)}, which this tool "
+                 f"does not speak — this trace used "
+                 f"{negotiation.get('chosen') or 'HTTP/1.1'}")
 
 
 def _analyse_http(trace):

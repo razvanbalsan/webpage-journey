@@ -10,6 +10,13 @@ from wj.collect.tls import alpn_for
 
 DEFAULT_PORTS = {"http": 80, "https": 443}
 
+# The only protocol this transport can put on the wire. A redirect hop's ALPN
+# offer is still driven by the original host's negotiation decision (ctx
+# carries no signal specific to the redirect target), so the target can
+# legitimately pick something else over ALPN -- guarded against below rather
+# than assumed away.
+SPOKEN_ALPN = "http/1.1"
+
 # The fixed headers this tool sends on every hop. Kept as data (not baked into
 # an f-string) so the exact set that went out can be recorded on the trace and
 # shown back to the user, rather than reconstructed by eye from the source.
@@ -116,6 +123,12 @@ def open_connection(split, ctx):
         context = ssl.create_default_context()
         context.set_alpn_protocols(alpn_for(ctx))
         sock = context.wrap_socket(sock, server_hostname=split.hostname)
+        negotiated = sock.selected_alpn_protocol()
+        if negotiated is not None and negotiated != SPOKEN_ALPN:
+            sock.close()
+            raise OSError(
+                f"redirect hop to {split.hostname} negotiated {negotiated} over ALPN, "
+                f"which this transport cannot speak (only {SPOKEN_ALPN})")
     return sock
 
 

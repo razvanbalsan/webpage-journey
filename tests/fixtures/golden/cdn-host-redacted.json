@@ -144,8 +144,8 @@
     },
     {
       "severity": "info",
-      "section": "tls",
-      "text": "this host advertises h3, h2, but this tool only offers HTTP/1.1 and negotiated http/1.1"
+      "section": "negotiation",
+      "text": "this host advertises h3, which this tool does not speak \u2014 this trace used HTTP/1.1"
     },
     {
       "severity": "warn",

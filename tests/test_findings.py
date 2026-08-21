@@ -52,29 +52,6 @@ def test_flags_insecure_dnssec_and_missing_aaaa():
     assert "HTTP/3" in joined
 
 
-def test_notes_when_host_advertises_a_protocol_we_did_not_negotiate():
-    trace = base_trace()
-    trace["dns"] = {"observed": True, "alpn_advertised": ["h2", "h3"]}
-    trace["tls"] = {"observed": True, "alpn": "http/1.1",
-                    "chain": [{"days_left": 90}], "legacy_versions_accepted": []}
-    findings.analyse(trace)
-    joined = " ".join(texts(trace))
-    assert "advertises h2, h3" in joined
-    assert "negotiated http/1.1" in joined
-    note = next(n for n in trace["notes"] if "advertises" in n["text"])
-    assert note["severity"] == "info"
-    assert note["section"] == "tls"
-
-
-def test_no_note_when_the_host_advertises_nothing_beyond_what_we_used():
-    trace = base_trace()
-    trace["dns"] = {"observed": True, "alpn_advertised": ["http/1.1"]}
-    trace["tls"] = {"observed": True, "alpn": "http/1.1",
-                    "chain": [{"days_left": 90}], "legacy_versions_accepted": []}
-    findings.analyse(trace)
-    assert not any("advertises" in t for t in texts(trace))
-
-
 def test_flags_a_plaintext_redirect_hop():
     trace = base_trace()
     trace["http"] = {"observed": True,
@@ -113,41 +90,57 @@ def test_flags_a_poor_security_grade_and_insecure_cookies():
     assert "session" in joined
 
 
-def test_a_clean_trace_only_gets_the_alpn_gap_note():
-    # A fully well-configured, HTTP/3-capable host trips no warning or critical
-    # note. It still earns the informational ALPN-gap note, because this tool
-    # only ever speaks HTTP/1.1 (see ALPN_PROTOCOLS in wj/collect/tls.py) while
-    # the host advertises more — that is real, honest information, not a defect.
-    trace = base_trace()
-    trace["dns"] = {"observed": True, "dnssec": "secure",
-                    "records": {"A": [{"data": "1.2.3.4", "ttl": 300}],
-                                "AAAA": [{"data": "::1", "ttl": 300}]},
-                    "alpn_advertised": ["h3", "h2"]}
-    trace["tls"] = {"observed": True, "alpn": "http/1.1", "chain": [{"days_left": 80}],
-                    "legacy_versions_accepted": []}
-    trace["http"] = {"observed": True, "hops": [], "final": {"status": 200},
-                     "security": {"grade": "A", "missing": [],
-                                  "cookies": [{"name": "s", "secure": True,
-                                               "httponly": True, "samesite": "Lax"}]}}
-    findings.analyse(trace)
-    assert trace["notes"] == [
-        {"severity": "info", "section": "tls",
-         "text": "this host advertises h3, h2, but this tool only offers HTTP/1.1 and negotiated http/1.1"},
-    ]
-
-
-def test_alpn_gap_note_does_not_claim_a_negotiation_that_did_not_happen():
+def test_no_alpn_gap_note_when_we_offered_and_used_what_the_host_advertises():
     trace = base_trace()
     trace["dns"] = {"observed": True, "dnssec": "secure",
                     "records": {"A": [{"data": "1.2.3.4", "ttl": 300}],
                                 "AAAA": [{"data": "::1", "ttl": 300}]},
                     "alpn_advertised": ["h2"]}
-    trace["tls"] = {"observed": True, "alpn": None, "chain": [{"days_left": 80}],
+    trace["negotiation"] = {"observed": True, "advertised": ["h2"],
+                            "offered": ["h2", "http/1.1"], "unavailable": [],
+                            "chosen": "h2", "attempted": []}
+    trace["tls"] = {"observed": True, "alpn": "h2", "chain": [{"days_left": 80}],
                     "legacy_versions_accepted": []}
     findings.analyse(trace)
     joined = " ".join(n["text"] for n in trace["notes"])
-    assert "negotiated http/1.1" not in joined
-    assert "did not negotiate" in joined
+    assert "only offers HTTP/1.1" not in joined
+    assert "advertises h2" not in joined
+
+
+def test_alpn_gap_note_names_the_missing_library_when_that_is_the_reason():
+    trace = base_trace()
+    trace["dns"] = {"observed": True, "dnssec": "secure",
+                    "records": {"A": [{"data": "1.2.3.4", "ttl": 300}],
+                                "AAAA": [{"data": "::1", "ttl": 300}]},
+                    "alpn_advertised": ["h2"]}
+    trace["negotiation"] = {"observed": True, "advertised": ["h2"],
+                            "offered": ["http/1.1"], "unavailable": ["h2"],
+                            "chosen": "http/1.1", "attempted": []}
+    trace["tls"] = {"observed": True, "alpn": "http/1.1", "chain": [{"days_left": 80}],
+                    "legacy_versions_accepted": []}
+    findings.analyse(trace)
+    joined = " ".join(n["text"] for n in trace["notes"])
+    assert "h2" in joined
+    assert "not installed" in joined or "cannot speak" in joined
+
+
+def test_alpn_gap_note_covers_a_protocol_this_build_never_offers():
+    # h3 is advertised by much of the web and is Phase 2 work. Until then the
+    # gap is real and should be stated, not silently ignored.
+    trace = base_trace()
+    trace["dns"] = {"observed": True, "dnssec": "secure",
+                    "records": {"A": [{"data": "1.2.3.4", "ttl": 300}],
+                                "AAAA": [{"data": "::1", "ttl": 300}]},
+                    "alpn_advertised": ["h3", "h2"]}
+    trace["negotiation"] = {"observed": True, "advertised": ["h3", "h2"],
+                            "offered": ["h2", "http/1.1"], "unavailable": [],
+                            "chosen": "h2", "attempted": []}
+    trace["tls"] = {"observed": True, "alpn": "h2", "chain": [{"days_left": 80}],
+                    "legacy_versions_accepted": []}
+    findings.analyse(trace)
+    joined = " ".join(n["text"] for n in trace["notes"])
+    assert "h3" in joined
+    assert "h2" not in joined.split("h3")[0]   # h2 is not listed as a gap
 
 
 def test_analyse_is_idempotent_not_cumulative():

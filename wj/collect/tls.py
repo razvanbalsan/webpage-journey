@@ -38,7 +38,12 @@ def alpn_for(ctx):
     """What this run offers over ALPN, as decided by the negotiate collector."""
     negotiation = ctx.results.get("negotiation", {})
     if negotiation.get("observed"):
-        return list(negotiation.get("offered") or ALPN_PROTOCOLS)
+        offered = negotiation.get("offered")
+        # A deliberate empty offer (negotiate.choose() returns [] for plain
+        # HTTP, where ALPN does not apply at all) must stay empty, not be
+        # silently upgraded to the fallback -- only a genuinely absent key
+        # falls back to ALPN_PROTOCOLS.
+        return list(offered) if offered is not None else list(ALPN_PROTOCOLS)
     return list(ALPN_PROTOCOLS)
 
 
