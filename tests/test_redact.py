@@ -3,10 +3,12 @@ import ipaddress
 import json
 import re
 
+import pytest
+
 from wj import findings, redact, schema
 
 
-def sample_trace():
+def sample_trace(protocol="http/1.1"):
     """A real trace document, assembled the same way orchestrate() does it.
 
     Built from schema.new_trace(...) with every section populated, then run
@@ -17,6 +19,14 @@ def sample_trace():
     "does the redacted document still contain X" never even had X to find in
     the first place. test_the_leak_fixture_populates_every_section below
     makes an incomplete fixture fail loudly instead of silently.
+
+    `protocol="h2"` swaps in the h2 shape of the fields Task 4 added
+    (negotiation.chosen, http.hops[].stream_id, http.final.header_bytes) --
+    one fixture cannot coherently be both an h1 and an h2 trace (h2's own
+    stream_id is an int, header_bytes a dict of ints, chosen "h2", none of
+    which the http/1.1 variant ever produces), and a leak walker that only
+    ever sees the empty/None h1 variant of those fields has never actually
+    walked over populated instances of them.
     """
     trace = schema.new_trace(
         target={"input": "https://example.com/", "host": "example.com",
@@ -45,18 +55,26 @@ def sample_trace():
         alpn_advertised=[], ech=False,
         timing_ms={"cold": 12.0, "warm": 1.0, "survey_ms": 30.0})
 
-    trace["negotiation"] = schema.observed(
-        advertised=[], offered=["http/1.1"], signal="no HTTPS record",
-        unavailable=[], chosen="http/1.1",
-        # Phase 1 never populates this -- there is no fallback ladder yet (see
-        # wj/collect/negotiate.py and Task 4's brief), so every real trace this
-        # tool can currently produce carries attempted=[] structurally, the
-        # same as advertised/offered/unavailable can each independently be
-        # empty. Nothing here can leak an identifier because nothing here is
-        # ever populated; Phase 2 is what gives this field per-attempt records
-        # (see .superpowers/sdd/2026-08-21-http2-phase1/task-8-brief.md) and
-        # is also what must extend this fixture once it does.
-        attempted=[])
+    if protocol == "h2":
+        trace["negotiation"] = schema.observed(
+            advertised=["h2"], offered=["h2", "http/1.1"], signal="HTTPS record",
+            unavailable=[], chosen="h2",
+            # See the module docstring above re: attempted staying [] in
+            # Phase 1 -- true for both variants, not just the h1 one.
+            attempted=[])
+    else:
+        trace["negotiation"] = schema.observed(
+            advertised=[], offered=["http/1.1"], signal="no HTTPS record",
+            unavailable=[], chosen="http/1.1",
+            # Phase 1 never populates this -- there is no fallback ladder yet (see
+            # wj/collect/negotiate.py and Task 4's brief), so every real trace this
+            # tool can currently produce carries attempted=[] structurally, the
+            # same as advertised/offered/unavailable can each independently be
+            # empty. Nothing here can leak an identifier because nothing here is
+            # ever populated; Phase 2 is what gives this field per-attempt records
+            # (see .superpowers/sdd/2026-08-21-http2-phase1/task-8-brief.md) and
+            # is also what must extend this fixture once it does.
+            attempted=[])
 
     trace["tcp"] = schema.observed(
         candidates=[{"ip": "93.184.216.34", "family": "ipv4", "connect_ms": 12.4, "error": None}],
@@ -65,7 +83,7 @@ def sample_trace():
         kernel={"rtt_ms": 12.4, "mss": 1460, "retransmits": 0, "source": "TCP_INFO"})
 
     trace["tls"] = schema.observed(
-        version="TLSv1.3", cipher="TLS_AES_128_GCM_SHA256", alpn="http/1.1",
+        version="TLSv1.3", cipher="TLS_AES_128_GCM_SHA256", alpn=protocol,
         handshake_ms=38.2,
         chain=[{"subject_cn": "example.com", "issuer_cn": "R3", "issuer_org": "Let's Encrypt",
                 "not_before": "2026-06-01T00:00:00+00:00", "not_after": "2026-08-30T00:00:00+00:00",
@@ -74,22 +92,40 @@ def sample_trace():
         trust_root="ISRG Root X1", verified=True, caa_match=True,
         resumption={"tested": False}, legacy_versions_accepted=[])
 
-    trace["http"] = schema.observed(
-        hops=[{"url": "http://example.com/", "status": 301,
-              "location": "https://example.com/", "protocol": "HTTP/1.1",
-              "ttfb_ms": 12.0, "connection_reused": False, "stream_id": None}],
-        redirect_limit_reached=False,
-        final={"url": "https://example.com/", "status": 200, "reason": "OK",
-               "protocol": "HTTP/1.1", "headers": [["content-type", "text/html"]],
-               "ttfb_ms": 88.0, "total_ms": 109.0, "wire_bytes": 14000, "decoded_bytes": 61000,
-               "encoding": "gzip", "ratio": 4.36, "content_type": "text/html",
-               "header_bytes": None},
-        cache={"state": None, "age": None, "header": None, "directives": None},
-        cdn=None,
-        security={"grade": "A", "present": {}, "missing": [],
-                 "cookies": [{"name": "s", "secure": True, "httponly": True, "samesite": "Lax"}],
-                 "scheme": "https"},
-        conditional={"tested": False})
+    if protocol == "h2":
+        trace["http"] = schema.observed(
+            hops=[{"url": "https://example.com/", "status": 301,
+                  "location": "https://example.com/next", "protocol": "HTTP/2",
+                  "ttfb_ms": 12.0, "connection_reused": False, "stream_id": 1}],
+            redirect_limit_reached=False,
+            final={"url": "https://example.com/next", "status": 200, "reason": None,
+                   "protocol": "HTTP/2", "headers": [["content-type", "text/html"]],
+                   "ttfb_ms": 88.0, "total_ms": 109.0, "wire_bytes": 14000, "decoded_bytes": 61000,
+                   "encoding": "gzip", "ratio": 4.36, "content_type": "text/html",
+                   "header_bytes": {"wire": 812, "decoded": 1400}},
+            cache={"state": None, "age": None, "header": None, "directives": None},
+            cdn=None,
+            security={"grade": "A", "present": {}, "missing": [],
+                     "cookies": [{"name": "s", "secure": True, "httponly": True, "samesite": "Lax"}],
+                     "scheme": "https"},
+            conditional={"tested": False})
+    else:
+        trace["http"] = schema.observed(
+            hops=[{"url": "http://example.com/", "status": 301,
+                  "location": "https://example.com/", "protocol": "HTTP/1.1",
+                  "ttfb_ms": 12.0, "connection_reused": False, "stream_id": None}],
+            redirect_limit_reached=False,
+            final={"url": "https://example.com/", "status": 200, "reason": "OK",
+                   "protocol": "HTTP/1.1", "headers": [["content-type", "text/html"]],
+                   "ttfb_ms": 88.0, "total_ms": 109.0, "wire_bytes": 14000, "decoded_bytes": 61000,
+                   "encoding": "gzip", "ratio": 4.36, "content_type": "text/html",
+                   "header_bytes": None},
+            cache={"state": None, "age": None, "header": None, "directives": None},
+            cdn=None,
+            security={"grade": "A", "present": {}, "missing": [],
+                     "cookies": [{"name": "s", "secure": True, "httponly": True, "samesite": "Lax"}],
+                     "scheme": "https"},
+            conditional={"tested": False})
 
     trace["path"] = schema.observed(
         source="traceroute",
@@ -108,7 +144,8 @@ def sample_trace():
     return trace
 
 
-def test_the_leak_fixture_populates_every_section():
+@pytest.mark.parametrize("protocol", ["http/1.1", "h2"])
+def test_the_leak_fixture_populates_every_section(protocol):
     # A prior version of this assertion checked set(sample_trace()) >=
     # set(schema.new_trace(...)) -- but since sample_trace() is now built
     # FROM schema.new_trace(...), that containment holds by construction and
@@ -118,12 +155,13 @@ def test_the_leak_fixture_populates_every_section():
     # assertion still passed). Checking every section is actually observed --
     # not merely present as a key -- is what makes an incomplete fixture fail
     # loudly, which is the whole point of this test.
-    trace = sample_trace()
+    trace = sample_trace(protocol)
     assert all(trace[s]["observed"] for s in schema.SECTIONS)
 
 
-def test_sample_trace_validates():
-    assert schema.validate(sample_trace()) == []
+@pytest.mark.parametrize("protocol", ["http/1.1", "h2"])
+def test_sample_trace_validates(protocol):
+    assert schema.validate(sample_trace(protocol)) == []
 
 
 def test_redacts_local_identifiers():
@@ -287,8 +325,15 @@ def find_leaks(document):
     return violations
 
 
-def test_redacted_document_has_no_mac_or_private_ip_anywhere_structurally():
-    out = redact.redact_trace(sample_trace())
+@pytest.mark.parametrize("protocol", ["http/1.1", "h2"])
+def test_redacted_document_has_no_mac_or_private_ip_anywhere_structurally(protocol):
+    # Walked for both variants: the h2 shape of the fields Task 4 added
+    # (stream_id as an int, header_bytes as a dict of ints, chosen: "h2")
+    # never reaches this walker under the http/1.1-only fixture, since those
+    # fields are None/absent there -- an all-empty variant is exactly the
+    # "fixture never populated the section that was leaking" pattern this
+    # project has been burned by three times before.
+    out = redact.redact_trace(sample_trace(protocol))
     leaks = find_leaks(out)
     assert leaks == [], leaks
 

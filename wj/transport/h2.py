@@ -183,6 +183,12 @@ def fetcher(ctx):
             # same finally block (a later hop).
             sock = open_connection(urlsplit(url), ctx)
         try:
+            # Measured, not inferred: _connection_state() attaches _wj_h2 to
+            # the socket the first time it runs on it, so its presence here
+            # -- checked before that call can set it -- is a direct record of
+            # whether an earlier fetch() call already sent a request over
+            # this exact connection.
+            connection_reused = hasattr(sock, "_wj_h2")
             state = _connection_state(sock)
             conn = state["conn"]
 
@@ -272,6 +278,7 @@ def fetcher(ctx):
             parsed["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
             parsed["wire_bytes"] = len(body)
             parsed["stream_id"] = stream_id
+            parsed["connection_reused"] = connection_reused
             # A response never arrived (timeout, reset, malformed peer): no
             # header bytes were measured, so this is absent, not a measured
             # zero -- ttfb_ms already follows this same rule.

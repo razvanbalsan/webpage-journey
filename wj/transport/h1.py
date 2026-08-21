@@ -174,6 +174,12 @@ def fetcher(ctx):
             parsed["ttfb_ms"] = ttfb
             parsed["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
             parsed["wire_bytes"] = len(parsed["body"])
+            # Every request goes out with Connection: close, and this module
+            # never hands a socket to a second fetch() call on purpose (see
+            # opened_here above) -- a connection carrying more than one
+            # request never happens here structurally, so this is a real
+            # measurement, not a guess, even though it never varies.
+            parsed["connection_reused"] = False
             return parsed
         finally:
             # Only close what this call opened. The first hop's socket belongs to

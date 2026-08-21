@@ -49,6 +49,10 @@ class FakeTLSSocket:
         # When set, a 1xx informational HEADERS block (e.g. 103 Early Hints)
         # is sent before the real response on every request.
         self.informational_headers = informational_headers
+        # Every request that actually reached this server, as its decoded
+        # header list -- lets a test assert on which physical connection a
+        # request travelled over, not just on what collect() labels a hop.
+        self.requests_seen = []
 
     def settimeout(self, _seconds):
         pass
@@ -65,6 +69,7 @@ class FakeTLSSocket:
         events = self.server.receive_data(data)
         for event in events:
             if isinstance(event, h2.events.RequestReceived):
+                self.requests_seen.append(list(event.headers))
                 if self.withhold_first_stream and self._withheld_stream_id is None:
                     self._withheld_stream_id = event.stream_id
                     continue

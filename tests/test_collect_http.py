@@ -2,10 +2,12 @@ import gzip
 
 import pytest
 
+from tests.test_transport_h2 import FakeTLSSocket
 from wj import capabilities
 from wj.collect import http as http_collect
 from wj.context import Context
 from wj.transport import h1
+from wj.transport import h2 as h2_transport
 
 
 def make_ctx():
@@ -13,6 +15,12 @@ def make_ctx():
                                      privileged=False, can_sudo=False)
     return Context(host="example.com", scheme="https", port=443, path="/",
                    timeout=5.0, deadline=1e9, caps=caps, results={})
+
+
+def _decoded_headers(headers):
+    def _s(v):
+        return v.decode() if isinstance(v, bytes) else v
+    return {_s(k): _s(v) for k, v in headers}
 
 
 RAW_200 = (
@@ -360,7 +368,9 @@ def test_negotiation_chosen_is_filled_in_from_the_handshake():
 
 def test_h2_hops_report_connection_reuse():
     # HTTP/1.1 sends Connection: close, so every hop is a new connection.
-    # HTTP/2 reuses one, and the trace should say so.
+    # HTTP/2 reuses one, and the trace should say so -- as reported by the
+    # transport itself (connection_reused in the response dict), not
+    # inferred by the collector from the protocol name and hop count.
     ctx = make_ctx()
     ctx.results["tls"] = {"observed": True, "alpn": "h2", "_socket": object()}
     ctx.results["negotiation"] = {"observed": True, "offered": ["h2"], "chosen": None,
@@ -370,12 +380,14 @@ def test_h2_hops_report_connection_reuse():
             "protocol": "HTTP/2", "status": 301, "reason": None,
             "headers": [("location", "https://example.com/next")], "body": b"",
             "ttfb_ms": 1.0, "total_ms": 1.0, "wire_bytes": 0,
-            "stream_id": 1, "header_bytes": {"wire": 20, "decoded": 60}},
+            "stream_id": 1, "header_bytes": {"wire": 20, "decoded": 60},
+            "connection_reused": False},
         "https://example.com/next": {
             "protocol": "HTTP/2", "status": 200, "reason": None,
             "headers": [("content-type", "text/html")], "body": b"ok",
             "ttfb_ms": 2.0, "total_ms": 2.0, "wire_bytes": 2,
-            "stream_id": 3, "header_bytes": {"wire": 22, "decoded": 66}},
+            "stream_id": 3, "header_bytes": {"wire": 22, "decoded": 66},
+            "connection_reused": True},
     }
     section = http_collect.collect(ctx, fetch=lambda url, sock: pages[url])
 
@@ -445,6 +457,47 @@ def test_http1_redirect_hops_open_a_fresh_connection():
     assert seen_socks[1] is None
 
 
+def test_connection_reused_is_copied_from_the_response_not_inferred():
+    # The collector must not compute its own opinion of reuse from the
+    # protocol name and hop count -- it copies whatever the transport
+    # reported. A stub that (implausibly, but that's the point) claims
+    # reuse under http/1.1 proves nothing here overrides it.
+    ctx = make_ctx()
+    ctx.results["tcp"] = {"observed": True, "_socket": object()}
+    ctx.results["tls"] = {"observed": True, "alpn": None, "_socket": object()}
+
+    def fetch(url, sock):
+        return {"protocol": "HTTP/1.1", "status": 301, "reason": "Moved Permanently",
+                "headers": [("Location", "https://example.com/next")], "body": b"",
+                "ttfb_ms": 1.0, "total_ms": 1.0, "wire_bytes": 0,
+                "connection_reused": True} if url.endswith("/") else {
+                "protocol": "HTTP/1.1", "status": 200, "reason": "OK",
+                "headers": [("content-type", "text/html")], "body": b"ok",
+                "ttfb_ms": 2.0, "total_ms": 2.0, "wire_bytes": 2}
+
+    section = http_collect.collect(ctx, fetch=fetch)
+
+    assert section["hops"][0]["connection_reused"] is True
+
+
+def test_connection_reused_is_absent_not_false_when_the_transport_does_not_report_it():
+    ctx = make_ctx()
+    ctx.results["tcp"] = {"observed": True, "_socket": object()}
+    ctx.results["tls"] = {"observed": True, "alpn": None, "_socket": object()}
+
+    def fetch(url, sock):
+        return {"protocol": "HTTP/1.1", "status": 301, "reason": "Moved Permanently",
+                "headers": [("Location", "https://example.com/next")], "body": b"",
+                "ttfb_ms": 1.0, "total_ms": 1.0, "wire_bytes": 0} if url.endswith("/") else {
+                "protocol": "HTTP/1.1", "status": 200, "reason": "OK",
+                "headers": [("content-type", "text/html")], "body": b"ok",
+                "ttfb_ms": 2.0, "total_ms": 2.0, "wire_bytes": 2}
+
+    section = http_collect.collect(ctx, fetch=fetch)
+
+    assert section["hops"][0]["connection_reused"] is None
+
+
 def test_collect_refuses_the_dead_socket_after_a_failed_handshake():
     from wj import capabilities
     from wj.context import Context
@@ -480,3 +533,127 @@ def test_a_negotiated_protocol_this_build_cannot_speak_names_the_protocol_not_a_
     assert section["observed"] is False
     assert "h2" in section["why_not"]
     assert "timeout" not in section["why_not"]
+
+
+def test_an_alpn_protocol_with_no_transport_module_names_it_not_a_timeout():
+    # h3 (or any future protocol negotiate.py might one day offer) has no
+    # entry in TRANSPORTS at all -- distinct from TransportUnavailable (a
+    # transport exists but this build can't use it, e.g. a missing library).
+    # transport_for()'s own fallback-to-http/1.1 exists for the "ALPN
+    # selected nothing" case; silently reusing it here would write HTTP/1.1
+    # bytes over a connection the server agreed to speak h3 over, and would
+    # report chosen: "http/1.1" -- a protocol nobody chose.
+    ctx = make_ctx()
+    ctx.results["tls"] = {"observed": True, "alpn": "h3", "_socket": object()}
+
+    section = http_collect.collect(ctx, fetch=lambda url, sock: pytest.fail(
+        "must not attempt a request over a protocol this build has no transport for"))
+
+    assert section["observed"] is False
+    assert "h3" in section["why_not"]
+    assert "timeout" not in section["why_not"]
+
+
+def test_negotiation_chosen_stays_none_for_plain_http():
+    # transport_for()'s protocol is a fallback ("http/1.1" whenever ALPN
+    # reported nothing), not a negotiated choice -- ALPN does not even apply
+    # without TLS. chosen must stay unmeasured, not silently inherit the
+    # fallback.
+    caps = capabilities.Capabilities(libs={"h2": True}, tools={},
+                                     privileged=False, can_sudo=False)
+    ctx = Context(host="example.com", scheme="http", port=80, path="/",
+                  timeout=5.0, deadline=1e9, caps=caps, results={})
+    ctx.results["tcp"] = {"observed": True, "_socket": object()}
+    ctx.results["negotiation"] = {"observed": True, "advertised": [], "offered": [],
+                                  "signal": "no TLS — ALPN does not apply",
+                                  "unavailable": [], "chosen": None, "attempted": []}
+
+    http_collect.collect(ctx, fetch=lambda url, sock: {
+        "protocol": "HTTP/1.1", "status": 200, "reason": "OK",
+        "headers": [], "body": b"", "ttfb_ms": 1.0, "total_ms": 1.0, "wire_bytes": 0})
+
+    assert ctx.results["negotiation"]["chosen"] is None
+
+
+def test_negotiation_chosen_stays_none_when_alpn_selected_nothing():
+    # TLS ran but the server did no ALPN at all. transport_for() still picks
+    # h1 to actually speak (the correct reading of "nothing selected"), but
+    # that is this tool's own fallback decision, not a fact about what the
+    # server chose -- chosen must not borrow it.
+    ctx = make_ctx()
+    ctx.results["tls"] = {"observed": True, "alpn": None, "_socket": object()}
+    ctx.results["negotiation"] = {"observed": True, "advertised": [], "offered": ["http/1.1"],
+                                  "signal": "no HTTPS record",
+                                  "unavailable": [], "chosen": None, "attempted": []}
+
+    http_collect.collect(ctx, fetch=lambda url, sock: {
+        "protocol": "HTTP/1.1", "status": 200, "reason": "OK",
+        "headers": [], "body": b"", "ttfb_ms": 1.0, "total_ms": 1.0, "wire_bytes": 0})
+
+    assert ctx.results["negotiation"]["chosen"] is None
+
+
+def test_collect_opens_a_fresh_connection_for_a_cross_origin_h2_redirect(monkeypatch):
+    # Critical regression probe: a redirect that leaves the origin must not
+    # be sent over the origin's own connection -- that connection is a TLS
+    # session established with, and authenticated to, a DIFFERENT host. Real
+    # h2 framing on both ends (via the real server-side h2.connection used
+    # throughout tests/test_transport_h2.py), no stubbed fetch: this is the
+    # collector driven through the real transport, not through a lambda.
+    origin_sock = FakeTLSSocket(
+        [(":status", "301"), ("location", "https://totally-other-host.net/landing")])
+    other_sock = FakeTLSSocket([(":status", "200")], body=b"landing page")
+    monkeypatch.setattr(h2_transport, "open_connection", lambda split, ctx: other_sock)
+
+    ctx = make_ctx()
+    ctx.results["tls"] = {"observed": True, "alpn": "h2", "_socket": origin_sock}
+    ctx.results["negotiation"] = {"observed": True, "offered": ["h2"], "chosen": None,
+                                  "attempted": []}
+
+    section = http_collect.collect(ctx, fetch=None)
+
+    # Exactly one request physically reached each connection -- the second
+    # request did NOT go out over example.com's socket.
+    assert len(origin_sock.requests_seen) == 1
+    assert _decoded_headers(origin_sock.requests_seen[0])[":authority"] == "example.com"
+    assert len(other_sock.requests_seen) == 1
+    assert _decoded_headers(other_sock.requests_seen[0])[":authority"] == "totally-other-host.net"
+
+    assert section["final"]["url"] == "https://totally-other-host.net/landing"
+    assert section["final"]["status"] == 200
+    assert section["hops"][0]["connection_reused"] is False
+    assert origin_sock.closed is False   # belongs to the TLS collector, not this call
+    assert other_sock.closed is True     # opened and closed within this one redirect hop
+
+
+def test_collect_reuses_the_real_h2_connection_for_a_same_origin_redirect():
+    # The other side of the same fix: a same-origin redirect must still
+    # reuse the one connection, real h2 framing on both ends.
+    origin_sock = FakeTLSSocket(
+        [(":status", "301"), ("location", "https://example.com/next")])
+
+    ctx = make_ctx()
+    ctx.results["tls"] = {"observed": True, "alpn": "h2", "_socket": origin_sock}
+    ctx.results["negotiation"] = {"observed": True, "offered": ["h2"], "chosen": None,
+                                  "attempted": []}
+
+    call_count = {"n": 0}
+    real_respond = origin_sock._respond
+
+    def _respond(stream_id):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            real_respond(stream_id)
+        else:
+            origin_sock._response_headers = [(":status", "200")]
+            origin_sock._body = b"ok"
+            real_respond(stream_id)
+
+    origin_sock._respond = _respond
+
+    section = http_collect.collect(ctx, fetch=None)
+
+    assert len(origin_sock.requests_seen) == 2
+    assert section["final"]["url"] == "https://example.com/next"
+    assert section["final"]["status"] == 200
+    assert section["hops"][0]["connection_reused"] is False   # the first request opened it

@@ -2,7 +2,7 @@
 
 import gzip
 import zlib
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from wj.schema import observed, unobserved
 from wj.transport import TRANSPORTS, h1
@@ -181,6 +181,18 @@ def collect(ctx, fetch=None):
     if sock is None:
         return unobserved("no connection to send a request over")
 
+    alpn = tls.get("alpn")
+    if alpn is not None and alpn not in TRANSPORTS:
+        # A protocol the server actually selected but this build has no
+        # transport module for at all (h3, deferred to Phase 2) -- distinct
+        # from TransportUnavailable below, where the module exists but this
+        # build can't use it (e.g. a missing library). transport_for()'s own
+        # fallback to HTTP/1.1 exists for "ALPN selected nothing"; silently
+        # reusing it here would write the wrong protocol's bytes over a
+        # connection the server agreed to speak something else over, and
+        # would report a chosen protocol nobody chose.
+        return unobserved(f"negotiated {alpn} but this build has no transport for it")
+
     module, protocol = transport_for(ctx)
     if fetch is None:
         try:
@@ -192,8 +204,12 @@ def collect(ctx, fetch=None):
             return unobserved(f"negotiated {protocol} but cannot speak it: {exc}")
 
     negotiation = ctx.results.get("negotiation")
-    if isinstance(negotiation, dict) and negotiation.get("observed"):
-        negotiation["chosen"] = protocol
+    if alpn and isinstance(negotiation, dict) and negotiation.get("observed"):
+        # `alpn`, not `protocol`: protocol is transport_for()'s fallback for
+        # when ALPN reported nothing, and a fallback is not a negotiated
+        # choice -- they coincide only when the server explicitly selected
+        # http/1.1 over ALPN.
+        negotiation["chosen"] = alpn
 
     url = f"{ctx.scheme}://{ctx.host}{ctx.path}"
     hops = []
@@ -219,16 +235,23 @@ def collect(ctx, fetch=None):
             return section
 
         if 300 <= status < 400 and location:
-            reused = protocol != "http/1.1" and len(hops) > 0
+            next_url = urljoin(url, location)
+            target = urlsplit(next_url)
+            same_origin = (target.scheme == ctx.scheme and target.hostname == ctx.host
+                          and (target.port or h1.DEFAULT_PORTS.get(target.scheme, 443)) == ctx.port)
             hops.append({"url": url, "status": status,
-                         "location": urljoin(url, location),
+                         "location": next_url,
                          "protocol": response.get("protocol"),
                          "ttfb_ms": response.get("ttfb_ms"),
-                         "connection_reused": reused,
+                         "connection_reused": response.get("connection_reused"),
                          "stream_id": response.get("stream_id")})
-            url = urljoin(url, location)
-            if protocol == "http/1.1":
-                sock = None   # fetch opens a fresh connection for the next hop
+            url = next_url
+            if protocol == "http/1.1" or not same_origin:
+                # A redirect that leaves the origin must not go out over the
+                # origin's own connection -- that socket is a TLS session
+                # established with, and authenticated to, a DIFFERENT host.
+                # fetch() opens a fresh, guarded connection for the next hop.
+                sock = None
             continue
         limit_reached = False
         break
