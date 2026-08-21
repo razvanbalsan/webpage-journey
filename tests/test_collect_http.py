@@ -2,6 +2,7 @@ import gzip
 
 import pytest
 
+from tests.test_transport_h1 import FakeSocket as FakeH1Socket
 from tests.test_transport_h2 import FakeTLSSocket
 from wj import capabilities
 from wj.collect import http as http_collect
@@ -535,6 +536,26 @@ def test_a_negotiated_protocol_this_build_cannot_speak_names_the_protocol_not_a_
     assert "timeout" not in section["why_not"]
 
 
+def test_chosen_is_recorded_even_when_the_transport_then_fails_to_load():
+    # The handshake measured a real choice; a transport that fails to load
+    # afterwards is a separate, later fact. Discarding the measurement
+    # because the later step failed would be the mirror image of fabricating
+    # one -- the trace should say both what was negotiated AND that no
+    # transport could be loaded for it.
+    caps = capabilities.Capabilities(libs={"h2": False}, tools={},
+                                     privileged=False, can_sudo=False)
+    ctx = Context(host="example.com", scheme="https", port=443, path="/",
+                  timeout=5.0, deadline=1e9, caps=caps, results={})
+    ctx.results["tls"] = {"observed": True, "alpn": "h2", "_socket": object()}
+    ctx.results["negotiation"] = {"observed": True, "offered": ["h2"], "chosen": None,
+                                  "attempted": []}
+
+    section = http_collect.collect(ctx, fetch=None)
+
+    assert section["observed"] is False
+    assert ctx.results["negotiation"]["chosen"] == "h2"
+
+
 def test_an_alpn_protocol_with_no_transport_module_names_it_not_a_timeout():
     # h3 (or any future protocol negotiate.py might one day offer) has no
     # entry in TRANSPORTS at all -- distinct from TransportUnavailable (a
@@ -657,3 +678,32 @@ def test_collect_reuses_the_real_h2_connection_for_a_same_origin_redirect():
     assert section["final"]["url"] == "https://example.com/next"
     assert section["final"]["status"] == 200
     assert section["hops"][0]["connection_reused"] is False   # the first request opened it
+
+
+def test_collect_falls_back_to_h1_for_a_cleartext_redirect_hop_under_h2(monkeypatch):
+    # Important-1 regression probe: an h2 origin redirecting to a plain
+    # http:// target must not hand that hop to the h2 transport at all --
+    # HTTP/2 over cleartext needs "prior knowledge" this tool has no way to
+    # acquire (ALPN cannot run without TLS). Driven against a realistic
+    # HTTP/1.1-only plain socket: if h2 were still selected for this hop, it
+    # would burn the whole timeout budget and report a misleading "no
+    # response received" instead of the real answer below.
+    origin_sock = FakeTLSSocket(
+        [(":status", "301"), ("location", "http://plain.example.com/landing")])
+    plain_sock = FakeH1Socket(
+        [b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello"])
+    monkeypatch.setattr(h1, "open_connection", lambda split, ctx: plain_sock)
+
+    ctx = make_ctx()
+    ctx.results["tls"] = {"observed": True, "alpn": "h2", "_socket": origin_sock}
+    ctx.results["negotiation"] = {"observed": True, "offered": ["h2"], "chosen": None,
+                                  "attempted": []}
+
+    section = http_collect.collect(ctx, fetch=None)
+
+    assert len(origin_sock.requests_seen) == 1   # the cleartext hop never went to h2
+    assert section["observed"] is True
+    assert section["final"]["url"] == "http://plain.example.com/landing"
+    assert section["final"]["protocol"] == "HTTP/1.1"   # honestly reports which transport served it
+    assert section["final"]["status"] == 200
+    assert plain_sock.sent.startswith(b"GET /landing HTTP/1.1\r\n")

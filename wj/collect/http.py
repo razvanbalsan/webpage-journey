@@ -194,6 +194,19 @@ def collect(ctx, fetch=None):
         return unobserved(f"negotiated {alpn} but this build has no transport for it")
 
     module, protocol = transport_for(ctx)
+
+    negotiation = ctx.results.get("negotiation")
+    if alpn and isinstance(negotiation, dict) and negotiation.get("observed"):
+        # `alpn`, not `protocol`: protocol is transport_for()'s fallback for
+        # when ALPN reported nothing, and a fallback is not a negotiated
+        # choice -- they coincide only when the server explicitly selected
+        # http/1.1 over ALPN. Recorded before the fetcher is even built: the
+        # handshake already measured this, and a transport that then fails
+        # to load (below) is a separate fact -- discarding a measurement
+        # because a later step failed would be the mirror image of
+        # fabricating one.
+        negotiation["chosen"] = alpn
+
     if fetch is None:
         try:
             fetch = module.fetcher(ctx)
@@ -202,14 +215,22 @@ def collect(ctx, fetch=None):
             # not a fallback: the server agreed to speak it. Retrying on HTTP/1.1
             # and reporting success would hide a real defect.
             return unobserved(f"negotiated {protocol} but cannot speak it: {exc}")
-
-    negotiation = ctx.results.get("negotiation")
-    if alpn and isinstance(negotiation, dict) and negotiation.get("observed"):
-        # `alpn`, not `protocol`: protocol is transport_for()'s fallback for
-        # when ALPN reported nothing, and a fallback is not a negotiated
-        # choice -- they coincide only when the server explicitly selected
-        # http/1.1 over ALPN.
-        negotiation["chosen"] = alpn
+        # HTTP/2 over cleartext needs "prior knowledge" this tool has no way
+        # to acquire -- ALPN cannot run without TLS, so nothing ever confirms
+        # a plain http:// hop actually speaks h2. transport_for() is decided
+        # once, from the origin's own handshake, and stays fixed for the
+        # whole redirect chain; without this, a redirect to a plain http://
+        # target would still be handed to the h2 transport, which (verified
+        # against a realistic HTTP/1.1-only port-80 server) just burns the
+        # timeout budget and reports a misleading "no response received"
+        # instead of an answer. Keep h1's fetcher on hand to use for any hop
+        # whose own URL is not https, regardless of what the origin
+        # negotiated -- each hop's own response.get("protocol") (already
+        # recorded per hop below) then honestly reports which transport
+        # actually served it, so no new field is needed to carry the switch.
+        cleartext_fetch = h1.fetcher(ctx) if protocol != "http/1.1" else fetch
+    else:
+        cleartext_fetch = fetch
 
     url = f"{ctx.scheme}://{ctx.host}{ctx.path}"
     hops = []
@@ -218,8 +239,9 @@ def collect(ctx, fetch=None):
     limit_reached = True  # cleared by the break below once a non-redirect response lands
 
     for _ in range(MAX_REDIRECTS):
+        active_fetch = fetch if urlsplit(url).scheme == "https" else cleartext_fetch
         try:
-            response = fetch(url, sock)
+            response = active_fetch(url, sock)
         except OSError as exc:
             section = unobserved(f"request failed: {exc}")
             section["hops"] = hops

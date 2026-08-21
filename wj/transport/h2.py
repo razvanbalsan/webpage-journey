@@ -195,7 +195,7 @@ def fetcher(ctx):
             request = build_request(url)
             request_headers = [(":method", request["method"]),
                                (":path", request["target"]),
-                               (":scheme", "https"),
+                               (":scheme", urlsplit(url).scheme),
                                (":authority", dict(request["headers"]).get("Host", ""))]
             # "Host" becomes :authority above; the rest of stripped_headers
             # (connection, transfer-encoding, upgrade, keep-alive,

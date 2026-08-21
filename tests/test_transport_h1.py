@@ -125,6 +125,22 @@ def test_fetcher_dechunks_a_response_fragmented_across_recv_calls():
     assert response["wire_bytes"] == len(b"hello world")
 
 
+def test_fetch_reports_connection_reused_as_false_through_the_real_transport():
+    # Not inferred by the collector -- h1.fetcher() itself must report this,
+    # since collect() now just copies response.get("connection_reused")
+    # verbatim. Driven through the real fetch() path, not asserted on a
+    # hand-built dict, so a future change to fetcher() that drops the field
+    # (or flips it) is actually caught here.
+    caps = capabilities.Capabilities(libs={}, tools={}, privileged=False, can_sudo=False)
+    ctx = Context(host="example.com", scheme="https", port=443, path="/",
+                  timeout=5.0, deadline=1e9, caps=caps, results={})
+    sock = FakeSocket([b"HTTP/1.1 200 OK\r\n\r\nhi"])
+
+    response = h1.fetcher(ctx)("https://example.com/", sock)
+
+    assert response["connection_reused"] is False
+
+
 def test_open_connection_refuses_a_redirect_hop_that_negotiated_a_protocol_it_cannot_speak(monkeypatch):
     # The redirect target's own DNS/HTTPS record is never consulted -- ctx still
     # carries the ORIGINAL host's negotiation decision -- so the target can

@@ -358,6 +358,18 @@ def test_response_dict_carries_the_request_that_was_actually_sent():
     assert "connection" not in sent
 
 
+def test_scheme_pseudo_header_reflects_the_actual_url_not_a_hardcoded_https():
+    # :scheme must be measured (what URL this request is actually for), not
+    # assumed -- a published request record that always claims "https" even
+    # when fetch() was called with an http:// URL would misdescribe what was
+    # sent, and would violate RFC 7540 SS8.1.2.3 on the wire besides.
+    sock = FakeTLSSocket([(":status", "200")])
+    response = h2_transport.fetcher(make_ctx())("http://example.com/", sock)
+
+    sent = dict(response["request"]["headers"])
+    assert sent[":scheme"] == "http"
+
+
 def test_reports_the_stream_id():
     sock = FakeTLSSocket([(":status", "200")])
     response = h2_transport.fetcher(make_ctx())("https://example.com/", sock)
@@ -371,6 +383,19 @@ def test_a_reused_connection_gets_the_next_odd_stream_id():
     second = fetch("https://example.com/next", sock)
     assert first["stream_id"] == 1
     assert second["stream_id"] == 3
+
+
+def test_connection_reused_is_false_first_then_true_on_the_same_socket():
+    # Measured, not hardcoded: the second fetch() call on the SAME socket
+    # object is the one real case where this must be True, and nothing in
+    # the suite exercised it before -- hardcoding connection_reused to False
+    # in the transport would still pass every other test.
+    sock = FakeTLSSocket([(":status", "200")])
+    fetch = h2_transport.fetcher(make_ctx())
+    first = fetch("https://example.com/", sock)
+    second = fetch("https://example.com/next", sock)
+    assert first["connection_reused"] is False
+    assert second["connection_reused"] is True
 
 
 def test_missing_h2_library_is_reported_not_crashed():
