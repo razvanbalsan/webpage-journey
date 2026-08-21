@@ -21,5 +21,11 @@ webpage-journey = "wj.cli:main"
 version = {attr = "wj.__version__"}
 
 [tool.setuptools.packages.find]
-include = ["wj", "wj.collect"]
+# Every package directory under wj/ must be listed here. wj/transport/ was
+# added by the HTTP/2 work and this list was not updated, so every installed
+# build shipped without it and wj/collect/http.py's `from wj.transport import
+# TRANSPORTS, h1` failed at startup -- invisible from a clone, because the
+# source tree satisfies the import that the wheel cannot.
+# tests/test_packaging.py fails if a new subpackage is ever omitted the same way.
+include = ["wj", "wj.collect", "wj.transport"]
 exclude = ["tests", "tests.*", "docs", "docs.*"]
